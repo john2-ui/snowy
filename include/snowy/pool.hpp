@@ -50,6 +50,7 @@ public:
         if constexpr (!std::is_void_v<T>) co_return std::move(*value);
     }
 private:
+    // ponytail: one shared FIFO; shard only if profiling shows queue contention.
     std::mutex mutex_;
     std::condition_variable ready_;
     std::deque<std::function<void()>> jobs_;

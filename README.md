@@ -2,7 +2,8 @@
 
 A small C++20 coroutine library with native io_uring (Linux), kqueue (macOS),
 and IOCP (Windows) backends. Includes lazy `task<T>`, a single-thread `loop`,
-cancellable timers, cross-thread posting, and IPv4/IPv6 TCP sockets.
+cancellable timers, cross-thread posting, IPv4/IPv6 TCP and UDP, positional
+file I/O, bounded channels, structured joins/timeouts, and a fixed worker pool.
 
 ```cpp
 #include <snowy/snowy.hpp>
@@ -35,6 +36,8 @@ ctest --test-dir build -C Release --output-on-failure
 For embedding, use `add_subdirectory(snowy)` and link `snowy::snowy`.
 Optional targets: `SNOWY_BUILD_TESTS`, `SNOWY_BUILD_EXAMPLES` (both default ON).
 See [timer](examples/timer.cpp) and the self-contained [TCP echo](examples/echo.cpp).
+Also see [UDP with timeout](examples/datagram.cpp), [file reads](examples/read.cpp),
+and a [parallel pipeline](examples/pipeline.cpp).
 Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md).
 
 ## Contracts
@@ -49,6 +52,16 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
   Errors throw `std::system_error`; cancellation does not undo partial progress.
 - `stop()` permanently cancels pending/future I/O and timers. Root failures
   stop siblings and are rethrown after cleanup; CPU work must yield cooperatively.
+- `event` and `channel<T>` are owner-thread primitives. Channels provide bounded
+  buffering and close/drain; `T` must be nothrow move-constructible.
+- `when_all` joins a vector of same-result tasks. `when_any`/`timeout` take
+  token-aware factories and drain canceled children before returning; timeout is
+  cooperative, not a guarantee that cleanup finishes at the deadline.
+- `pool::run` executes owned CPU/blocking functions on workers and resumes on the
+  calling loop. Running jobs are drained on cancellation; I/O does not migrate.
+- Files use explicit offsets. Open/close are synchronous; macOS read/write/flush
+  and Windows flush use two shared workers. Linux read/write/flush and Windows
+  read/write use native completions. Exclusive `mode::create` never truncates.
 
 Optimization ideas are informed by [Condy](https://github.com/condy-cpp/condy),
 including symmetric transfer, coroutine-owned requests and batch processing.
