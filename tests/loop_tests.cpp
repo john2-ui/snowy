@@ -55,6 +55,19 @@ snowy::task<> sibling(snowy::loop& loop, bool& cleaned) {
     }
 }
 
+/** @brief Keep the ready queue nonempty until a timer and a post both run.
+ *  @param loop Owner. @param timed Timer flag. @param posted Post flag. */
+snowy::task<> busy(snowy::loop& loop, bool& timed, bool& posted) {
+    while (!timed || !posted) co_await loop.schedule();
+}
+
+/** @brief Ensure a busy ready queue does not starve deadlines.
+ *  @param loop Owner. @param timed Completion flag. */
+snowy::task<> deadline(snowy::loop& loop, bool& timed) {
+    co_await loop.sleep(2ms);
+    timed = true;
+}
+
 /** @brief Verify loop contracts. @return Zero on success; nonzero on backend failure. */
 int main() {
     try {
@@ -74,6 +87,16 @@ int main() {
             loop.run(); // Drain a post that raced with idle exit.
         }
         check(count == 101);
+        bool timed = false, posted = false;
+        loop.spawn(busy(loop, timed, posted));
+        loop.spawn(deadline(loop, timed));
+        std::thread poster([&] {
+            std::this_thread::sleep_for(1ms);
+            loop.post([&posted] { posted = true; });
+        });
+        loop.run();
+        poster.join();
+        check(timed && posted);
         bool cleaned = false, caught = false;
         loop.spawn(sibling(loop, cleaned));
         loop.spawn(fail());

@@ -202,6 +202,9 @@ void loop::run() {
                 posted = !posts_.empty();
             }
             if (!roots_ && !io_ && timers_.empty() && ready_.empty() && !posted) break;
+            // Ready-only work needs no kernel poll; each tick still checks posts,
+            // cancellation and deadlines. Pending I/O retains the polling budget.
+            if (!io_ && (!ready_.empty() || posted)) continue;
             auto delay = std::chrono::nanoseconds{-1};
             if (!ready_.empty() || posted) delay = std::chrono::nanoseconds{0};
             else if (!timers_.empty()) {
