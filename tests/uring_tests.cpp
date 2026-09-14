@@ -62,21 +62,22 @@ snowy::task<> run(snowy::loop& loop, snowy::file& file) {
 }
 /** @brief Check idle timers still run on a storage-only ring. @param loop Owner. */
 snowy::task<> idle(snowy::loop& loop) { co_await loop.sleep(std::chrono::milliseconds{1}); }
-/** @brief Verify soft/hard links, drain and ordered error results. @param loop Owner. */
-snowy::task<> chain(snowy::loop& loop) {
-    auto socket = snowy::socket::listen(loop, {"127.0.0.1", 0});
+/** @brief Verify soft/hard links, drain and ordered short-read results. @param loop Owner.
+ *  @param fd File containing exactly 4096 bytes. */
+snowy::task<> chain(snowy::loop& loop, int fd) {
+    std::array<std::byte, 2> data{};
     std::array<io_uring_sqe, 3> entries{};
     io_uring_prep_nop(&entries[0]);
-    // A null read buffer can fail during preparation on newer kernels, aborting
-    // the entire chain. Fsync on a socket fails at execution, which tests LINK.
-    io_uring_prep_fsync(&entries[1], socket.native_handle(), 0);
+    // A short read is an execution-time link failure, even with a positive CQE.
+    // Unlike invalid pointers, it cannot fail while the chain is being prepared.
+    io_uring_prep_read(&entries[1], fd, data.data(), data.size(), 4095);
     io_uring_prep_nop(&entries[2]);
     auto result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::soft);
-    if (result != std::vector<int>({0, -EINVAL, -ECANCELED}))
+    if (result != std::vector<int>({0, 1, -ECANCELED}))
         std::cerr << "soft results: " << result[0] << ' ' << result[1] << ' ' << result[2] << '\n';
-    check(result[0] == 0 && result[1] == -EINVAL && result[2] == -ECANCELED);
+    check(result[0] == 0 && result[1] == 1 && result[2] == -ECANCELED);
     result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::hard);
-    check(result[0] == 0 && result[1] == -EINVAL && result[2] == 0);
+    check(result[0] == 0 && result[1] == 1 && result[2] == 0);
     io_uring_prep_nop(&entries[1]);
     entries[2].flags = IOSQE_IO_DRAIN;
     for (unsigned i = 0; i < 128; ++i) {
@@ -109,7 +110,7 @@ int main(int argc, char** argv) {
                          mode == "direct" || mode == "iopoll");
         loop.run(run(loop, file));
         loop.run(idle(loop));
-        if (mode == "plain" || mode == "sqpoll") loop.run(chain(loop));
+        if (mode == "plain" || mode == "sqpoll") loop.run(chain(loop, file.native_handle()));
         bool caught = false;
         options.entries = 0;
         try { snowy::loop invalid(options); } catch (const std::invalid_argument&) { caught = true; }
