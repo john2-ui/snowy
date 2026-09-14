@@ -14,8 +14,13 @@ class file {
 public:
     enum class mode { read, read_write, create }; ///< create is exclusive; never truncates.
     /** @brief Open a regular file. @param loop Owner. @param path Native filesystem path.
-     *  @param access Access mode. @throws std::system_error on OS failure. */
-    file(loop& loop, const std::filesystem::path& path, mode access = mode::read);
+     *  @param access Access mode. @param direct Bypass the data cache (Linux/Windows).
+     *  @details Direct I/O requires device-specific buffer/length/offset alignment;
+     *  macOS rejects it instead of substituting a different cache policy.
+     *  @throws std::system_error on OS failure or unsupported direct I/O. */
+    file(loop& loop, const std::filesystem::path& path, mode access = mode::read, bool direct = false);
+    /** @brief Borrow the native handle; never close or change it while owned here. */
+    detail::socket_id native_handle() const noexcept { return fd_; }
     /** @brief Move an idle file. @param other Source becoming empty. */
     file(file&& other);
     file(const file&) = delete;

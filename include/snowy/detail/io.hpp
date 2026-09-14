@@ -15,6 +15,9 @@
 #include <unistd.h>
 #include <sys/uio.h>
 #endif
+#ifdef __linux__
+struct io_uring_sqe;
+#endif
 
 namespace snowy::detail {
 #ifdef _WIN32
@@ -27,10 +30,18 @@ inline constexpr socket_id invalid_socket = -1;
 
 /** @brief Supported native request kinds. */
 enum class opcode { nop, read, write, accept, connect, recv_from, send_to,
-                    file_read, file_write, file_sync };
+                    file_read, file_write, file_sync
+#ifdef __linux__
+                    , native
+#endif
+};
 
 /** @brief Single-shot native request; nonmovable while the kernel retains it. */
 struct io : op {
+#ifdef __linux__
+    void (*prepare)(io&, io_uring_sqe&) noexcept = nullptr; ///< Linux extension submission.
+    void (*result)(io&, int, unsigned) noexcept = nullptr; ///< CQE handler; never resumes inline.
+#endif
 #ifdef _WIN32
     /** @brief Native completion address with a portable owner back-pointer. */
     struct packet : OVERLAPPED {

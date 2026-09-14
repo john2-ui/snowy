@@ -17,6 +17,9 @@
 
 namespace snowy {
 class loop;
+#ifdef __linux__
+namespace uring { struct options; class access; }
+#endif
 namespace detail {
 struct io;
 struct wait;
@@ -63,6 +66,10 @@ public:
 
     /** @brief Create the native queue. @throws std::system_error on OS failure. */
     loop();
+#ifdef __linux__
+    /** @brief Create an explicitly configured Linux queue. @param config Native options. */
+    explicit loop(const uring::options& config);
+#endif
     /** @brief Release an idle native queue. */
     ~loop();
     loop(const loop&) = delete;
@@ -124,6 +131,9 @@ public:
     [[nodiscard]] timer sleep(clock::duration delay, std::stop_token token = {});
 
 private:
+#ifdef __linux__
+    friend class uring::access;
+#endif
     friend class socket;
     friend class file;
     friend struct detail::op;
@@ -140,6 +150,7 @@ private:
     std::atomic_bool stopping_{false};
     std::atomic_bool cancel_{false};
     std::size_t roots_ = 0;
+    unsigned budget_ = 64; ///< Maximum cooperative resumes between native polls.
     bool running_ = false;
     std::exception_ptr error_;
     detail::io* io_ = nullptr; ///< Intrusive list of native requests.

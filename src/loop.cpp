@@ -218,7 +218,7 @@ void loop::run() {
             batch.clear();
             expire();
             // Bound cooperative work between polls so I/O and timers progress.
-            for (unsigned i = 0; i < 64; ++i) {
+            for (unsigned i = 0; i < budget_; ++i) {
                 auto* node = ready_.pop();
                 if (!node) break;
                 static_cast<detail::work*>(node)->handle.resume();

@@ -20,19 +20,25 @@ void canceled(loop& loop, std::stop_token token) {
         throw std::system_error(std::make_error_code(std::errc::operation_canceled));
 }
 }
-file::file(loop& loop, const std::filesystem::path& path, mode access) : loop_(&loop) {
+file::file(loop& loop, const std::filesystem::path& path, mode access, bool direct) : loop_(&loop) {
     loop.check();
     if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
         throw std::invalid_argument("invalid file path");
 #ifdef _WIN32
     const DWORD rights = access == mode::read ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE;
     auto handle = CreateFileW(path.c_str(), rights, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, access == mode::create ? CREATE_NEW : OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        nullptr, access == mode::create ? CREATE_NEW : OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED | (direct ? FILE_FLAG_NO_BUFFERING : 0), nullptr);
     if (handle == INVALID_HANDLE_VALUE)
         throw std::system_error(static_cast<int>(GetLastError()), std::system_category(), "CreateFile");
     fd_ = reinterpret_cast<std::uintptr_t>(handle);
 #else
     int flags = access == mode::read ? O_RDONLY : O_RDWR;
+#ifdef __linux__
+    if (direct) flags |= O_DIRECT;
+#else
+    if (direct) throw std::system_error(std::make_error_code(std::errc::operation_not_supported));
+#endif
     if (access == mode::create) flags |= O_CREAT | O_EXCL;
     fd_ = ::open(path.c_str(), flags | O_CLOEXEC | O_NONBLOCK, 0600);
     if (fd_ < 0) throw std::system_error(errno, std::generic_category(), "open");
