@@ -47,7 +47,7 @@ loop::loop() : driver_(std::make_unique<driver>()) {
 }
 
 loop::~loop() {
-    if (running_ || roots_ || io_ || !timers_.empty() || !ready_.empty()) std::terminate();
+    if (running_ || roots_ || io_ || waits_ || !timers_.empty() || !ready_.empty()) std::terminate();
     io_uring_queue_exit(&driver_->ring);
     ::close(driver_->event);
 }

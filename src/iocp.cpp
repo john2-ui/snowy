@@ -20,7 +20,7 @@ loop::loop() : driver_(std::make_unique<driver>()) {
 }
 
 loop::~loop() {
-    if (running_ || roots_ || io_ || !timers_.empty() || !ready_.empty()) std::terminate();
+    if (running_ || roots_ || io_ || waits_ || !timers_.empty() || !ready_.empty()) std::terminate();
     CloseHandle(driver_->port);
     WSACleanup();
 }

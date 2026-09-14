@@ -19,6 +19,7 @@ namespace snowy {
 class loop;
 namespace detail {
 struct io;
+struct wait;
 
 /** @brief Coroutine-owned ready node; queued once and consumed on its loop. */
 struct work : ready_operation {
@@ -81,6 +82,8 @@ public:
     /** @brief Request cancellation of pending and future operations; thread-safe.
      *  @details Permanent for this loop. run() still drains task cleanup. */
     void stop() noexcept;
+    /** @brief Return whether permanent stop has been requested; thread-safe. */
+    bool stopped() const noexcept { return stopping_.load(std::memory_order_relaxed); }
     /** @brief Verify thread affinity. @throws std::logic_error on a wrong thread. */
     void check() const;
 
@@ -125,6 +128,7 @@ private:
     friend struct detail::op;
     friend struct detail::op::cancel_fn;
     friend struct detail::io;
+    friend struct detail::wait;
     struct driver;
     std::unique_ptr<driver> driver_;
     std::thread::id thread_ = std::this_thread::get_id();
@@ -138,6 +142,7 @@ private:
     bool running_ = false;
     std::exception_ptr error_;
     detail::io* io_ = nullptr; ///< Intrusive list of native requests.
+    detail::wait* waits_ = nullptr; ///< Non-I/O waits, including cleanup barriers.
 
     /** @brief Own a root until terminal completion. @param input Consumed task. */
     detail::detached start(task<> input);

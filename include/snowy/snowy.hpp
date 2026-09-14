@@ -9,3 +9,5 @@
 #include "snowy/task.hpp"
 #include "snowy/loop.hpp"
 #include "snowy/socket.hpp"
+#include "snowy/event.hpp"
+#include "snowy/channel.hpp"

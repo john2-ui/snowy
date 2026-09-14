@@ -1,6 +1,7 @@
 /** @file loop.cpp
  *  @brief Owner-thread scheduling and cancellation, independent of the OS. */
 #include "snowy/detail/io.hpp"
+#include "snowy/event.hpp"
 #include <algorithm>
 #include <limits>
 
@@ -75,6 +76,24 @@ void loop::finish(detail::op& op) noexcept {
     op.callback.reset(); // Wait for an in-flight stop callback before frame reuse.
     op.active = false;
     ready_.push(op);
+}
+
+bool detail::wait::park(std::coroutine_handle<> h, std::stop_token token) {
+    owner.check();
+    if (interruptible && !owner.arm(*this, token)) return false;
+    active = true;
+    handle = h;
+    next = owner.waits_;
+    if (next) next->prev = this;
+    owner.waits_ = this;
+    return true;
+}
+
+void detail::wait::notify() noexcept {
+    if (!active) return;
+    if (prev) prev->next = next; else owner.waits_ = next;
+    if (next) next->prev = prev;
+    owner.finish(*this);
 }
 
 void loop::stop() noexcept {
@@ -164,6 +183,14 @@ void loop::expire() {
                 cancel(*op);
             op = next;
         }
+        for (auto* w = waits_; w;) {
+            auto* next = w->next;
+            if (w->interruptible && (all || w->canceled.load(std::memory_order_relaxed))) {
+                w->error = std::make_error_code(std::errc::operation_canceled);
+                w->notify();
+            }
+            w = next;
+        }
     }
     const auto now = clock::now();
     while (!timers_.empty() && timers_.front()->due <= now) {
@@ -201,7 +228,7 @@ void loop::run() {
                 std::lock_guard lock(mutex_);
                 posted = !posts_.empty();
             }
-            if (!roots_ && !io_ && timers_.empty() && ready_.empty() && !posted) break;
+            if (!roots_ && !io_ && !waits_ && timers_.empty() && ready_.empty() && !posted) break;
             // Ready-only work needs no kernel poll; each tick still checks posts,
             // cancellation and deadlines. Pending I/O retains the polling budget.
             if (!io_ && (!ready_.empty() || posted)) continue;
