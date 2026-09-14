@@ -3,9 +3,10 @@ cmake_minimum_required(VERSION 3.20)
 project(snowy VERSION 0.1.0 LANGUAGES CXX)
 
 option(SNOWY_BUILD_TESTS "Build Snowy tests" ON)
+option(SNOWY_BUILD_EXAMPLES "Build Snowy examples" ON)
 find_package(Threads REQUIRED)
 
-add_library(snowy src/loop.cpp src/socket.cpp)
+add_library(snowy STATIC src/loop.cpp src/socket.cpp)
 add_library(snowy::snowy ALIAS snowy)
 
 target_compile_features(snowy PUBLIC cxx_std_20)
@@ -45,4 +46,8 @@ endif()
 if(SNOWY_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(SNOWY_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()

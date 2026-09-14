@@ -1,0 +1,8 @@
+foreach(example timer echo)
+    add_executable(snowy_${example} ${example}.cpp)
+    target_link_libraries(snowy_${example} PRIVATE snowy::snowy)
+    if(SNOWY_BUILD_TESTS)
+        add_test(NAME example_${example} COMMAND snowy_${example})
+        set_tests_properties(example_${example} PROPERTIES TIMEOUT 10)
+    endif()
+endforeach()
