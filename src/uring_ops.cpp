@@ -39,8 +39,8 @@ memory::memory(std::size_t size, std::size_t alignment) : size_(size), alignment
 }
 memory::~memory() { ::operator delete(data_, std::align_val_t{alignment_}); }
 
-op::op(loop& loop, io_uring_sqe sqe, std::stop_token token, files* f, buffers* b)
-    : detail::io(loop, detail::opcode::native, -1, nullptr, 0, token), sqe_(sqe), files_(f), buffers_(b) {
+op::op(loop& loop, io_uring_sqe sqe, std::stop_token token, files* f, buffers* b, bool* direction)
+    : detail::io(loop, detail::opcode::native, -1, nullptr, 0, token, direction), sqe_(sqe), files_(f), buffers_(b) {
     loop.check();
     if (sqe.flags & (IOSQE_CQE_SKIP_SUCCESS | IOSQE_IO_LINK | IOSQE_IO_HARDLINK))
         throw std::invalid_argument("standalone operation cannot skip or link completions");

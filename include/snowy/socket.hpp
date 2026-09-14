@@ -70,6 +70,9 @@ public:
 
 private:
     friend class udp;
+#ifdef __linux__
+    friend class uring::access;
+#endif
     loop* loop_;
     detail::socket_id fd_;
     bool reading_ = false;
