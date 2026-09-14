@@ -103,6 +103,12 @@ validation and 256-buffer single/multishot workloads. Both alternate library ord
 after warmup; setup/registration and accept are excluded. Runtime setup/registration
 policies remain each library's own. Buffer bundles are Snowy-only in this comparison.
 
+`snowy_runtime pmr 1000000` measures non-elided frames using a standard unsynchronized
+pool; compare with `task` under the same compiler/STL. Pool reuse is not necessarily
+faster than the default allocator. `snowy_mailbox 100000 1024` measures two-loop
+delivery including wakeups, FIFO validation and thread teardown; capacity `0`
+selects rendezvous. Setup is excluded by a shared start signal. Neither benchmark
+is a Condy comparison.
+
 CI executes comparisons as smoke tests only; publish rankings only after repeated
-runs on controlled hardware. Zero-copy and cross-loop channel throughput are not
-yet measured by this suite.
+runs on controlled hardware. Zero-copy send throughput is not yet measured here.
