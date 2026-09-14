@@ -56,6 +56,23 @@ T extension(SOCKET fd, GUID id) {
 
 void loop::submit(detail::io& op) {
     op.overlapped.request = &op;
+    if (op.code == detail::opcode::file_read || op.code == detail::opcode::file_write) {
+        op.overlapped.Offset = static_cast<DWORD>(op.offset);
+        op.overlapped.OffsetHigh = static_cast<DWORD>(op.offset >> 32);
+        auto handle = reinterpret_cast<HANDLE>(op.fd);
+        const BOOL success = op.code == detail::opcode::file_read
+            ? ReadFile(handle, op.data, op.size, nullptr, &op.overlapped)
+            : WriteFile(handle, op.data, op.size, nullptr, &op.overlapped);
+        if (!success) {
+            const auto error = GetLastError();
+            if (error != ERROR_IO_PENDING) {
+                if (error != ERROR_HANDLE_EOF || op.code != detail::opcode::file_read)
+                    op.error = io_error(static_cast<int>(error));
+                complete(op);
+            }
+        }
+        return;
+    }
     if (op.code == detail::opcode::nop) {
         if (!PostQueuedCompletionStatus(driver_->port, 0, 0, &op.overlapped))
             throw std::system_error(static_cast<int>(GetLastError()), std::system_category());
@@ -66,6 +83,10 @@ void loop::submit(detail::io& op) {
     DWORD bytes = 0, flags = 0;
     int result = 0;
     switch (op.code) {
+    case detail::opcode::file_read:
+    case detail::opcode::file_write:
+    case detail::opcode::file_sync:
+        throw std::logic_error("invalid file submission");
     case detail::opcode::nop: break;
     case detail::opcode::read:
         result = WSARecv(op.fd, &op.buffer, 1, &bytes, &flags, &op.overlapped, nullptr); break;
@@ -140,6 +161,17 @@ void loop::poll(std::chrono::nanoseconds delay) {
         if (!entries[i].lpOverlapped) continue;
         auto& op = *static_cast<detail::io::packet*>(entries[i].lpOverlapped)->request;
         op.bytes = entries[i].dwNumberOfBytesTransferred;
+        if (op.code == detail::opcode::file_read || op.code == detail::opcode::file_write) {
+            DWORD bytes = 0;
+            if (entries[i].Internal != 0 &&
+                !GetOverlappedResult(reinterpret_cast<HANDLE>(op.fd), &op.overlapped, &bytes, FALSE)) {
+                const auto error = GetLastError();
+                if (error == ERROR_HANDLE_EOF && op.code == detail::opcode::file_read) op.bytes = 0;
+                else op.error = io_error(static_cast<int>(error));
+            }
+            complete(op);
+            continue;
+        }
         if (op.code != detail::opcode::nop) {
             DWORD bytes = 0, flags = 0;
             // Only the error path needs NTSTATUS -> Winsock error conversion.

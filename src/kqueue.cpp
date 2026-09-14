@@ -49,6 +49,12 @@ void loop::submit(detail::io& op) {
     do {
         switch (op.code) {
         case detail::opcode::nop: r = 0; break;
+        case detail::opcode::file_read:
+        case detail::opcode::file_write:
+        case detail::opcode::file_sync:
+            op.error = std::make_error_code(std::errc::operation_not_supported);
+            complete(op);
+            return; // Regular file operations use pool workers, not readiness.
         case detail::opcode::read: r = ::recv(op.fd, op.data, op.size, 0); break;
         case detail::opcode::write: r = ::send(op.fd, op.data, op.size, 0); break;
         case detail::opcode::accept: r = ::accept(op.fd, nullptr, nullptr); break;

@@ -14,3 +14,4 @@
 #include "snowy/pool.hpp"
 #include "snowy/when.hpp"
 #include "snowy/udp.hpp"
+#include "snowy/file.hpp"

@@ -125,6 +125,7 @@ public:
 
 private:
     friend class socket;
+    friend class file;
     friend struct detail::op;
     friend struct detail::op::cancel_fn;
     friend struct detail::io;

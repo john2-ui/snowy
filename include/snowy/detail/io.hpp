@@ -26,7 +26,8 @@ inline constexpr socket_id invalid_socket = -1;
 #endif
 
 /** @brief Supported native request kinds. */
-enum class opcode { nop, read, write, accept, connect, recv_from, send_to };
+enum class opcode { nop, read, write, accept, connect, recv_from, send_to,
+                    file_read, file_write, file_sync };
 
 /** @brief Single-shot native request; nonmovable while the kernel retains it. */
 struct io : op {
@@ -46,6 +47,7 @@ struct io : op {
     socket_id fd;
     void* data;
     unsigned size;
+    std::uint64_t offset = 0; ///< Explicit file position; never a shared file cursor.
     sockaddr_storage address{};
     int address_size = 0;
     socket_id accepted = invalid_socket; ///< Owned until accept() transfers it.

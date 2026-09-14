@@ -64,6 +64,9 @@ void loop::submit(detail::io& op) {
     auto* sqe = driver_->sqe();
     switch (op.code) {
     case detail::opcode::nop: io_uring_prep_nop(sqe); break;
+    case detail::opcode::file_read: io_uring_prep_read(sqe, op.fd, op.data, op.size, op.offset); break;
+    case detail::opcode::file_write: io_uring_prep_write(sqe, op.fd, op.data, op.size, op.offset); break;
+    case detail::opcode::file_sync: io_uring_prep_fsync(sqe, op.fd, 0); break;
     case detail::opcode::read:
         io_uring_prep_recv(sqe, op.fd, op.data, op.size, 0); break;
     case detail::opcode::write:
