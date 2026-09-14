@@ -7,7 +7,7 @@ option(SNOWY_BUILD_EXAMPLES "Build Snowy examples" ON)
 option(SNOWY_BUILD_BENCHMARKS "Build Snowy benchmarks" OFF)
 find_package(Threads REQUIRED)
 
-add_library(snowy STATIC src/loop.cpp src/socket.cpp)
+add_library(snowy STATIC src/loop.cpp src/socket.cpp src/pool.cpp)
 add_library(snowy::snowy ALIAS snowy)
 
 target_compile_features(snowy PUBLIC cxx_std_20)

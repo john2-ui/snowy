@@ -11,3 +11,4 @@
 #include "snowy/socket.hpp"
 #include "snowy/event.hpp"
 #include "snowy/channel.hpp"
+#include "snowy/pool.hpp"
