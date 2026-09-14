@@ -5,7 +5,7 @@ project(snowy VERSION 0.1.0 LANGUAGES CXX)
 option(SNOWY_BUILD_TESTS "Build Snowy tests" ON)
 find_package(Threads REQUIRED)
 
-add_library(snowy src/loop.cpp)
+add_library(snowy src/loop.cpp src/socket.cpp)
 add_library(snowy::snowy ALIAS snowy)
 
 target_compile_features(snowy PUBLIC cxx_std_20)

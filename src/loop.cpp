@@ -110,15 +110,24 @@ void loop::spawn(task<> input) {
     start(std::move(input));
 }
 
-detail::io::~io() { detail::close(accepted); }
+detail::io::~io() {
+    if (reserved) *busy = false;
+    detail::close(accepted);
+}
 
 bool detail::io::await_suspend(std::coroutine_handle<> h) {
+    owner.check();
+    if (busy && *busy) throw std::logic_error("socket direction already in use");
     if (!owner.arm(*this, token)) return false;
+    if (busy) { *busy = true; reserved = true; }
     handle = h;
     next = owner.io_;
     if (next) next->prev = this;
     owner.io_ = this;
-    try { owner.submit(*this); }
+    try {
+        if (size == 0 && (code == opcode::read || code == opcode::write)) owner.complete(*this);
+        else owner.submit(*this);
+    }
     catch (...) {
         if (next) next->prev = nullptr;
         owner.io_ = next;

@@ -52,20 +52,27 @@ struct io : op {
     bool cancel_sent = false;
     bool started = false;
     bool done = false; ///< Linux retains this request until its cancel CQE too.
+    bool* busy = nullptr; ///< Socket direction, borrowed until await completion.
+    bool reserved = false;
 
     /** @brief Bind one native request.
      *  @param context Owner loop. @param kind Operation kind.
      *  @param socket Native socket. @param buffer Borrowed buffer.
-     *  @param length Buffer bytes. @param stop Optional cancellation token. */
+     *  @param length Buffer bytes. @param stop Optional cancellation token.
+     *  @param slot Socket direction to reserve, or nullptr for independent I/O. */
     io(loop& context, opcode kind, socket_id socket = invalid_socket,
-       void* buffer = nullptr, unsigned length = 0, std::stop_token stop = {})
-        : op(context), code(kind), fd(socket), data(buffer), size(length), token(stop) {}
+       void* buffer = nullptr, unsigned length = 0, std::stop_token stop = {}, bool* slot = nullptr)
+        : op(context), code(kind), fd(socket), data(buffer), size(length), token(stop), busy(slot) {}
     /** @brief Release an accepted socket not consumed by the caller. */
     ~io();
     /** @brief Submit after registering cancellation. @param h Suspended coroutine. */
     bool await_suspend(std::coroutine_handle<> h);
     /** @brief Return transferred bytes. @throws std::system_error on I/O failure. */
-    std::size_t await_resume() { op::await_resume(); return bytes; }
+    std::size_t await_resume() {
+        if (reserved) { *busy = false; reserved = false; }
+        op::await_resume();
+        return bytes;
+    }
 };
 
 /** @brief Close an owned socket. @param fd Socket or invalid_socket. */
