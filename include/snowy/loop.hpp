@@ -77,12 +77,18 @@ public:
 
     /** @brief Queue a root task; run() reports its first unhandled error.
      *  @param input Task consumed on the owner thread. */
-    void spawn(task<> input);
+    template <typename A>
+    void spawn(task<void, A> input) {
+        check();
+        if (!input) throw std::invalid_argument("empty task");
+        start(std::move(input));
+    }
     /** @brief Drain all roots and posts; may be called again after normal exit.
      *  @throws Any unhandled task error, after stopping and draining siblings. */
     void run();
     /** @brief Run a root and any children it spawns. @param input Consumed task. */
-    void run(task<> input) { spawn(std::move(input)); run(); }
+    template <typename A>
+    void run(task<void, A> input) { spawn(std::move(input)); run(); }
     /** @brief Queue a function from any thread.
      *  @param fn Owned callback, executed on the loop; errors stop the loop. */
     void post(std::function<void()> fn);
@@ -157,7 +163,13 @@ private:
     detail::wait* waits_ = nullptr; ///< Non-I/O waits, including cleanup barriers.
 
     /** @brief Own a root until terminal completion. @param input Consumed task. */
-    detail::detached start(task<> input);
+    template <typename A>
+    detail::detached start(task<void, A> input) {
+        ++roots_;
+        try { co_await schedule(); co_await std::move(input); }
+        catch (...) { fail(); }
+        --roots_;
+    }
     /** @brief Record the first error and cancel remaining work. */
     void fail() noexcept;
     /** @brief Register cancellation. @param op Pending operation. @param token Token. */

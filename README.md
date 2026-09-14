@@ -44,6 +44,9 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
 
 - Tasks are lazy and move-only; await them as rvalues. `sync_wait` blocks for
   a task result; it does not drive a loop.
+- `task<T, Allocator>` uses an explicit leading allocator argument for its frame;
+  `<snowy/pmr.hpp>` provides `pmr::task<T>`. The resource outlives frame destruction
+  and must support the threads that allocate/free it. Children choose independently.
 - Construct, run and destroy a loop on its owner thread. `run()` drains roots
   and posts, returning at idle. Only `post`, `stop` and stop tokens are thread-safe.
 - Buffers, sockets and the loop must outlive pending operations. A socket

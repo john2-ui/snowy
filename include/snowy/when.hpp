@@ -30,8 +30,8 @@ struct group : join {
  *  @param input Child task. @param state Parent state. @param value Result slot.
  *  @param index Input position.
  *  @param race Whether first completion requests sibling cancellation. */
-template <typename T>
-detached collect(task<T> input, join& state, std::optional<result<T>>& value, std::size_t index, bool race) {
+template <typename T, typename A>
+detached collect(task<T, A> input, join& state, std::optional<result<T>>& value, std::size_t index, bool race) {
     co_await state.owner.schedule();
     std::exception_ptr error;
     try {
@@ -56,8 +56,8 @@ namespace snowy {
  *  @throws First observed error, only after all started tasks complete.
  *  @details No implicit fail-fast cancellation: pass shared tokens to children
  *  when needed. Every child must eventually complete or honor loop.stop(). */
-template <typename T>
-task<std::vector<detail::result<T>>> when_all(loop& loop, std::vector<task<T>> tasks) {
+template <typename T, typename A>
+task<std::vector<detail::result<T>>> when_all(loop& loop, std::vector<task<T, A>> tasks) {
     loop.check();
     detail::group<T> state(loop, tasks.size());
     for (std::size_t i = 0; i < tasks.size(); ++i) {
@@ -77,8 +77,8 @@ task<std::vector<detail::result<T>>> when_all(loop& loop, std::vector<task<T>> t
  *  @param loop Owner. @param tasks Consumed tasks; an empty pack succeeds.
  *  @return Tuple in input order, with monostate for void tasks.
  *  @throws First observed error after all started children finish. */
-template <typename... T>
-task<std::tuple<detail::result<T>...>> when_all(loop& loop, task<T>... tasks) {
+template <typename... T, typename... A>
+task<std::tuple<detail::result<T>...>> when_all(loop& loop, task<T, A>... tasks) {
     loop.check();
     detail::join state(loop);
     std::tuple<std::optional<detail::result<T>>...> values;

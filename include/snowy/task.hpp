@@ -4,6 +4,7 @@
  */
 
 #pragma once
+#include "snowy/detail/frame.hpp"
 
 #include <concepts>
 #include <coroutine>
@@ -15,7 +16,7 @@
 
 namespace snowy {
 
-template <typename T>
+template <typename T = void, typename A = void>
 class task;
 
 namespace detail {
@@ -86,8 +87,8 @@ private:
     std::exception_ptr exception_;
 };
 
-template <typename T>
-class task_promise final : public task_promise_base {
+template <typename T, typename A>
+class task_promise final : public task_promise_base, public frame<A> {
     static_assert(!std::is_void_v<T>);
     static_assert(!std::is_reference_v<T>, "task<T&> is not supported");
 
@@ -96,7 +97,7 @@ public:
      * @brief Creates the task object that owns this coroutine frame.
      * @return A lazy task bound to this promise.
      */
-    task<T> get_return_object() noexcept;
+    task<T, A> get_return_object() noexcept;
 
     /**
      * @brief Stores the value returned by the coroutine.
@@ -123,14 +124,14 @@ private:
     std::optional<T> value_;
 };
 
-template <>
-class task_promise<void> final : public task_promise_base {
+template <typename A>
+class task_promise<void, A> final : public task_promise_base, public frame<A> {
 public:
     /**
      * @brief Creates the void task that owns this coroutine frame.
      * @return A lazy task bound to this promise.
      */
-    task<void> get_return_object() noexcept;
+    task<void, A> get_return_object() noexcept;
 
     /** @brief Marks successful completion of a void coroutine. */
     void return_void() const noexcept {}
@@ -144,13 +145,15 @@ public:
 /**
  * @brief A lazy, uniquely owned coroutine result.
  * @tparam T Result type; references are deliberately unsupported.
+ * @tparam A Optional frame allocator. Pass it as the coroutine's first argument;
+ * its resource must outlive frame destruction, including on another thread.
  * @details Awaiting an rvalue task transfers execution directly into it. The
  * awaiting coroutine resumes through symmetric transfer at final suspension.
  */
-template <typename T = void>
+template <typename T, typename A>
 class [[nodiscard]] task {
 public:
-    using promise_type = detail::task_promise<T>;
+    using promise_type = detail::task_promise<T, A>;
     using handle_type = std::coroutine_handle<promise_type>;
 
     /** @brief Construct an empty task; awaiting it throws logic_error. */
@@ -266,14 +269,14 @@ private:
 
 namespace detail {
 
-template <typename T>
-task<T> task_promise<T>::get_return_object() noexcept {
-    return task<T>{std::coroutine_handle<task_promise>::from_promise(*this)};
+template <typename T, typename A>
+task<T, A> task_promise<T, A>::get_return_object() noexcept {
+    return task<T, A>{std::coroutine_handle<task_promise>::from_promise(*this)};
 }
 
-inline task<void> task_promise<void>::get_return_object() noexcept {
-    return task<void>{
-        std::coroutine_handle<task_promise<void>>::from_promise(*this)};
+template <typename A>
+task<void, A> task_promise<void, A>::get_return_object() noexcept {
+    return task<void, A>{std::coroutine_handle<task_promise>::from_promise(*this)};
 }
 
 } // namespace detail

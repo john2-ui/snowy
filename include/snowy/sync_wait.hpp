@@ -38,8 +38,8 @@ struct wait_state {
 /** @brief Publish a task result before releasing the waiting thread.
  *  @param input Consumed task.
  *  @param state Caller-owned state; do not access it after unlocking. */
-template <typename T>
-detached wait_task(task<T> input, wait_state<T>& state) {
+template <typename T, typename A>
+detached wait_task(task<T, A> input, wait_state<T>& state) {
     try {
         if constexpr (std::is_void_v<T>) {
             co_await std::move(input);
@@ -61,8 +61,8 @@ namespace snowy {
  *  @param input Consumed task; external events require another running thread.
  *  @return The result, or void for a void task.
  *  @throws Any error from the task or result construction. */
-template <typename T>
-T sync_wait(task<T> input) {
+template <typename T, typename A>
+T sync_wait(task<T, A> input) {
     detail::wait_state<T> state;
     detail::wait_task(std::move(input), state);
     std::unique_lock lock(state.mutex);

@@ -114,21 +114,6 @@ void loop::fail() noexcept {
     stop();
 }
 
-detail::detached loop::start(task<> input) {
-    ++roots_;
-    try {
-        co_await schedule();
-        co_await std::move(input);
-    } catch (...) { fail(); }
-    --roots_;
-}
-
-void loop::spawn(task<> input) {
-    check();
-    if (!input) throw std::invalid_argument("empty task");
-    start(std::move(input));
-}
-
 detail::io::~io() {
     if (reserved) *busy = false;
     detail::close(accepted);
