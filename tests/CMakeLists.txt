@@ -1,0 +1,10 @@
+add_executable(snowy_core_tests core_tests.cpp)
+target_link_libraries(snowy_core_tests PRIVATE snowy::snowy)
+if(MSVC)
+    target_compile_options(snowy_core_tests PRIVATE /W4 /WX /permissive-)
+else()
+    target_compile_options(snowy_core_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_test(NAME snowy.core COMMAND snowy_core_tests)
+set_tests_properties(snowy.core PROPERTIES TIMEOUT 30)
