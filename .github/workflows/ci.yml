@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC 14
+            os: ubuntu-24.04
+            config: Release
+            configure: >-
+              -G Ninja
+              -DCMAKE_CXX_COMPILER=g++-14
+              -DCMAKE_BUILD_TYPE=Release
+          - name: Linux Clang 18 ASan + UBSan
+            os: ubuntu-24.04
+            config: Debug
+            configure: >-
+              -G Ninja
+              -DCMAKE_CXX_COMPILER=clang++-18
+              -DCMAKE_BUILD_TYPE=Debug
+              -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          - name: macOS Clang 20 + libc++
+            os: macos-14
+            config: Release
+          - name: Windows MSVC 2022 Debug
+            os: windows-2022
+            config: Debug
+            configure: >-
+              -G "Visual Studio 17 2022" -A x64
+          - name: Windows MSVC 2022 Release
+            os: windows-2022
+            config: Release
+            configure: >-
+              -G "Visual Studio 17 2022" -A x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install liburing
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev
+
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install llvm@20
+          llvm_prefix="$(brew --prefix llvm@20)"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSNOWY_BUILD_BENCHMARKS=ON \
+            -DCMAKE_CXX_COMPILER="$llvm_prefix/bin/clang++" \
+            -DCMAKE_CXX_FLAGS="-nostdinc++ -isystem $llvm_prefix/include/c++/v1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$llvm_prefix/lib/c++ -L$llvm_prefix/lib/unwind -Wl,-rpath,$llvm_prefix/lib/c++ -Wl,-rpath,$llvm_prefix/lib/unwind -lunwind"
+
+      - name: Configure
+        if: runner.os != 'macOS'
+        shell: bash
+        run: cmake -S . -B build -DSNOWY_BUILD_BENCHMARKS=ON ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
