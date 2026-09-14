@@ -85,6 +85,9 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
 
 Explicitly include `<snowy/uring.hpp>`; the portable API does not require it.
 See the [registered-file example](examples/fixed.cpp).
+`<snowy/uring_ops.hpp>` adds native openat/statx/rename/unlink/mkdir, vectored I/O,
+fsync/fallocate, splice, poll and waitid. Paths and output structures are borrowed;
+openat returns an owning `uring::fd`. waitid requires liburing 2.6+/Linux 6.7+.
 
 - `loop(uring::options)` configures SQ/CQ sizes, scheduling budget, SQPOLL,
   IOPOLL and task-run flags. Requested unsupported modes fail, never silently downgrade.
