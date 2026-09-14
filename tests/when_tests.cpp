@@ -81,6 +81,10 @@ snowy::task<> run(snowy::loop& loop) {
     try { co_await snowy::when_any<int>(loop, std::move(jobs)); }
     catch (const std::invalid_argument&) { caught = true; }
     check(caught);
+    check((co_await snowy::timeout<int>(loop, 1h,
+        [value = std::make_unique<int>(7), &loop](std::stop_token) {
+            check(*value == 7); return quick(loop);
+        })) == 42);
 }
 /** @brief Run tests under a real backend. */
 int main() {

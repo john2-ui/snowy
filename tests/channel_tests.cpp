@@ -1,5 +1,5 @@
 /** @file channel_tests.cpp
- *  @brief Exercise bounded queues, broadcast waits, cancellation, and close. */
+ *  @brief Exercise handoffs, rendezvous, backpressure, cancellation, and close. */
 #include <snowy/snowy.hpp>
 #include <cstdlib>
 #include <iostream>
@@ -54,11 +54,21 @@ snowy::task<> cancel_send(snowy::loop& loop, snowy::channel<int>& c) {
 int main() {
     try {
         snowy::loop loop;
-        snowy::channel<int> c(loop, 3);
-        int left = 4, sum = 0;
-        for (int i = 0; i < 4; ++i) { loop.spawn(produce(c, left)); loop.spawn(consume(c, sum)); }
-        loop.run();
-        check(sum == 4 * 1000 * 1001 / 2);
+        for (unsigned capacity : {0u, 1u, 3u, 1024u}) {
+            snowy::channel<int> c(loop, capacity);
+            int left = 4, sum = 0;
+            for (int i = 0; i < 4; ++i) { loop.spawn(produce(c, left)); loop.spawn(consume(c, sum)); }
+            loop.run();
+            check(sum == 4 * 1000 * 1001 / 2);
+        }
+        snowy::channel<std::unique_ptr<int>> owned(loop, 1);
+        auto first = std::make_unique<int>(1), second = std::make_unique<int>(2);
+        check(owned.try_send(first) && !first);
+        check(!owned.try_send(second) && second);
+        check(**owned.try_recv() == 1);
+        check(owned.try_send(second) && !second);
+        owned.close();
+        check(owned.closed() && **owned.try_recv() == 2 && !owned.try_recv());
         snowy::channel<int> empty(loop, 1);
         for (int i = 0; i < 100; ++i) {
             std::stop_source stop;
