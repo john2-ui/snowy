@@ -39,6 +39,17 @@ snowy::task<> closed(snowy::channel<int>& c) {
     catch (const std::system_error& e) { caught = e.code() == std::errc::broken_pipe; }
     check(caught);
 }
+/** @brief Cancel a blocked sender without consuming the buffered value.
+ *  @param loop Owner. @param c Capacity-one channel. */
+snowy::task<> cancel_send(snowy::loop& loop, snowy::channel<int>& c) {
+    co_await c.send(1);
+    bool caught = false;
+    try {
+        co_await snowy::timeout<void>(loop, std::chrono::milliseconds{1},
+            [&](std::stop_token token) { return c.send(2, token); });
+    } catch (const std::system_error& e) { caught = e.code() == std::errc::timed_out; }
+    check(caught && (co_await c.recv()) == 1);
+}
 /** @brief Run contention and lifecycle checks. */
 int main() {
     try {
@@ -54,6 +65,7 @@ int main() {
             loop.spawn(canceled(empty, stop));
             loop.run(cancel(loop, stop));
         }
+        loop.run(cancel_send(loop, empty));
         loop.run(closed(empty));
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

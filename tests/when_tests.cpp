@@ -27,6 +27,16 @@ snowy::task<int> slow(snowy::loop& loop, std::stop_token token, bool& done) {
 }
 /** @brief Complete on the next tick. @param loop Owner. */
 snowy::task<int> quick(snowy::loop& loop) { co_await loop.schedule(); co_return 42; }
+/** @brief Fail after suspension. @param loop Owner. */
+snowy::task<> fail(snowy::loop& loop) {
+    co_await loop.schedule();
+    throw std::runtime_error("child");
+}
+/** @brief Complete after a peer fails. @param loop Owner. @param done Cleanup flag. */
+snowy::task<> finish(snowy::loop& loop, bool& done) {
+    co_await loop.sleep(1ms);
+    done = true;
+}
 /** @brief Run successful and exceptional compositions. @param loop Owner. */
 snowy::task<> run(snowy::loop& loop) {
     std::vector<snowy::task<std::unique_ptr<int>>> tasks;
@@ -58,6 +68,19 @@ snowy::task<> run(snowy::loop& loop) {
     try { co_await snowy::when_any<int>(loop, std::move(jobs)); }
     catch (const std::runtime_error&) { caught = true; }
     check(caught && done);
+    done = false;
+    caught = false;
+    empty.clear();
+    empty.push_back(fail(loop));
+    empty.push_back(finish(loop, done));
+    try { co_await snowy::when_all(loop, std::move(empty)); }
+    catch (const std::runtime_error&) { caught = true; }
+    check(caught && done);
+    jobs.clear();
+    caught = false;
+    try { co_await snowy::when_any<int>(loop, std::move(jobs)); }
+    catch (const std::invalid_argument&) { caught = true; }
+    check(caught);
 }
 /** @brief Run tests under a real backend. */
 int main() {

@@ -40,6 +40,19 @@ snowy::task<> read(snowy::file& file, unsigned block) {
     check((co_await file.read(data, std::uint64_t{block} * data.size())) == data.size());
     for (auto b : data) check(b == static_cast<std::byte>(block));
 }
+/** @brief Accept either side of a completion/cancellation race, exactly once.
+ *  @param file Source. @param token Shared token. @param done Completion count. */
+snowy::task<> race(snowy::file& file, std::stop_token token, unsigned& done) {
+    std::array<std::byte, 4096> data;
+    try { check((co_await file.read(data, 0, token)) == data.size()); }
+    catch (const std::system_error& e) { check(e.code() == std::errc::operation_canceled); }
+    ++done;
+}
+/** @brief Stop after queued readers start. @param loop Owner. @param stop Source. */
+snowy::task<> cancel(snowy::loop& loop, std::stop_source& stop) {
+    co_await loop.schedule();
+    stop.request_stop();
+}
 /** @brief Exercise concurrent positions and edge cases. @param loop Owner. @param file Target. */
 snowy::task<> run(snowy::loop& loop, snowy::file& file) {
     std::vector<snowy::task<>> jobs;
@@ -63,6 +76,14 @@ snowy::task<> run(snowy::loop& loop, snowy::file& file) {
     try { co_await file.read(data, UINT64_MAX); }
     catch (const std::invalid_argument&) { caught = true; }
     check(caught);
+    co_await read(file, 0);
+    std::stop_source concurrent_stop;
+    unsigned done = 0;
+    jobs.clear();
+    for (unsigned i = 0; i < 512; ++i) jobs.push_back(race(file, concurrent_stop.get_token(), done));
+    jobs.push_back(cancel(loop, concurrent_stop));
+    co_await snowy::when_all(loop, std::move(jobs));
+    check(done == 512);
     co_await read(file, 0);
 }
 /** @brief Observe write failure on a read-only file. @param file Read-only handle. */
