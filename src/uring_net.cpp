@@ -161,8 +161,11 @@ provided::chunk::~chunk() { release(); }
 
 stream::stream(socket& socket, io_uring_sqe sqe, std::stop_token token, provided* table,
                void* context, void (*consume)(stream&, int, unsigned))
-    : detail::io(access::owner(socket), detail::opcode::native, -1, nullptr, 0, token,
-                 access::direction(socket, false)), context(context), consume(consume), sqe_(sqe), table_(table) {
+    : stream(access::owner(socket), sqe, token, table, context, consume, access::direction(socket, false)) {}
+stream::stream(loop& loop, io_uring_sqe sqe, std::stop_token token, provided* table,
+               void* context, void (*consume)(stream&, int, unsigned), bool* direction)
+    : detail::io(loop, detail::opcode::native, -1, nullptr, 0, token, direction),
+      context(context), consume(consume), sqe_(sqe), table_(table) {
     if (table && &table->loop_ != &owner) throw std::invalid_argument("provided buffers belong to another loop");
     if (table) ++table->active_;
     prepare = [](detail::io& base, io_uring_sqe& entry) noexcept { entry = static_cast<stream&>(base).sqe_; };

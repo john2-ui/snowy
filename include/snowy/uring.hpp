@@ -367,6 +367,12 @@ public:
      *  @param context Consumer state. @param consume Callback invoked without coroutine resumption. */
     stream(socket& socket, io_uring_sqe sqe, std::stop_token token, provided* table,
            void* context, void (*consume)(stream&, int, unsigned));
+    /** @brief Bind a pollable fd or timer to the same completion barrier.
+     *  @param loop Owner. @param sqe Prepared request. @param token Cancellation.
+     *  @param table Optional buffer pin. @param context Consumer state. @param consume Callback.
+     *  @param direction Optional socket-direction reservation. */
+    stream(loop& loop, io_uring_sqe sqe, std::stop_token token, provided* table,
+           void* context, void (*consume)(stream&, int, unsigned), bool* direction = nullptr);
     /** @brief Release the table after terminal and cancel CQEs. */
     ~stream();
     /** @brief Request cancellation without reentering CQ processing. */
@@ -427,27 +433,16 @@ task<> recvmsg(udp& socket, provided& table, F fn, std::stop_token token = {}, u
     }
 }
 
-/** @brief Receive a TCP byte stream with multishot and owned buffer leases.
- *  @param socket Peer. @param table Provided buffers. @param fn Owned short callback,
- *  bool(chunk); false stops normally. It may transfer chunks to another owner-thread consumer.
- *  @param token Cancellation. @param bundle Fill multiple buffers per CQE (Linux 6.10+).
- *  @details Rearms on kernel termination/ENOBUFS, never
- *  falls back to single-shot. EOF returns; callback errors rethrow after cleanup. */
+/** @brief Internal shared receive/read loop; leases and failures use one lifetime barrier.
+ *  @param loop Owner. @param sqe Prepared buffer-select read. @param table Buffer pool.
+ *  @param fn Consumer. @param token Cancellation. @param direction Optional reservation.
+ *  @param bundle Decode several published buffers per CQE. */
 template <typename F>
-task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}, bool bundle = false) {
-#ifndef IORING_RECVSEND_BUNDLE
-    if (bundle) throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "receive bundles need newer liburing");
-#endif
+task<> receive(loop& loop, io_uring_sqe sqe, provided& table, F fn, std::stop_token token,
+               bool* direction = nullptr, bool bundle = false) {
     struct context { provided& table; F& fn; bool bundle; } context{table, fn, bundle};
     for (;;) {
-        io_uring_sqe sqe{};
-        io_uring_prep_recv_multishot(&sqe, socket.native_handle(), nullptr, 0, 0);
-#ifdef IORING_RECVSEND_BUNDLE
-        if (bundle) sqe.ioprio |= IORING_RECVSEND_BUNDLE;
-#endif
-        sqe.flags |= IOSQE_BUFFER_SELECT;
-        sqe.buf_group = table.group();
-        stream request(socket, sqe, token, &table, &context,
+        stream request(loop, sqe, token, &table, &context,
             [](stream& request, int res, unsigned flags) {
                 auto& ctx = *static_cast<struct context*>(request.context);
                 if (flags & IORING_CQE_F_BUFFER) {
@@ -458,7 +453,7 @@ task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}, b
                     if (ctx.bundle) ctx.table.each(flags, size, consume);
                     else consume(ctx.table.take(flags, size));
                 } else if (res > 0) throw std::runtime_error("multishot missing buffer ID");
-            });
+            }, direction);
         try { co_await request; }
         catch (const std::system_error& e) {
             if (request.failure) std::rethrow_exception(request.failure);
@@ -469,6 +464,26 @@ task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}, b
         if (request.stopped || (!request.error && !request.bytes)) co_return;
         co_await table.available(token);
     }
+}
+
+/** @brief Receive a TCP byte stream with multishot and owned buffer leases.
+ *  @param socket Peer. @param table Provided buffers. @param fn Owned bool(chunk) callback;
+ *  false stops normally. Chunks may move to another owner-thread consumer.
+ *  @param token Cancellation. @param bundle Fill several buffers per CQE (Linux 6.10+).
+ *  @details Rearms on ENOBUFS/early termination, without single-shot fallback.
+ *  EOF returns; callback failures drain before rethrowing. Borrowed resources outlive the task. */
+template <typename F>
+task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}, bool bundle = false) {
+    io_uring_sqe sqe{};
+    io_uring_prep_recv_multishot(&sqe, socket.native_handle(), nullptr, 0, 0);
+#ifdef IORING_RECVSEND_BUNDLE
+    if (bundle) sqe.ioprio |= IORING_RECVSEND_BUNDLE;
+#else
+    if (bundle) throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "receive bundles need newer liburing");
+#endif
+    sqe.flags |= IOSQE_BUFFER_SELECT;
+    sqe.buf_group = table.group();
+    return receive(access::owner(socket), sqe, table, std::move(fn), token, access::direction(socket, false), bundle);
 }
 
 /** @brief Accept with one multishot request; rearm if the kernel ends a shot.

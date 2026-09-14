@@ -88,6 +88,8 @@ See the [registered-file example](examples/fixed.cpp).
 `<snowy/uring_ops.hpp>` adds native openat/statx/rename/unlink/mkdir, vectored I/O,
 fsync/fallocate, splice, poll and waitid. Paths and output structures are borrowed;
 openat returns an owning `uring::fd`. waitid requires liburing 2.6+/Linux 6.7+.
+`<snowy/uring_multi.hpp>` adds readiness `watch`, periodic `ticks` (6.4+), and
+provided-buffer `read` for pipes/pollable fds (6.7+, not regular files).
 
 - `loop(uring::options)` configures SQ/CQ sizes, scheduling budget, SQPOLL,
   IOPOLL and task-run flags. Requested unsupported modes fail, never silently downgrade.
