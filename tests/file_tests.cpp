@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <new>
 #include <random>
 
 /** @brief Fail in all builds. @param ok Required invariant. */
@@ -94,6 +95,20 @@ snowy::task<> readonly(snowy::file& file) {
     catch (const std::system_error&) { caught = true; }
     check(caught);
 }
+#ifndef __APPLE__
+/** @brief Exercise native direct I/O with aligned memory. @param file Direct handle. */
+snowy::task<> direct(snowy::file& file) {
+    auto release = [](std::byte* data) { ::operator delete(data, std::align_val_t{4096}); };
+    std::unique_ptr<std::byte, decltype(release)> memory(
+        static_cast<std::byte*>(::operator new(4096, std::align_val_t{4096})), release);
+    std::span<std::byte> data(memory.get(), 4096);
+    std::fill(data.begin(), data.end(), std::byte{99});
+    check((co_await file.write(data, 0)) == data.size());
+    std::fill(data.begin(), data.end(), std::byte{});
+    check((co_await file.read(data, 0)) == data.size());
+    for (auto b : data) check(b == std::byte{99});
+}
+#endif
 /** @brief Run file tests without touching preexisting paths. */
 int main() {
     try {
@@ -110,5 +125,14 @@ int main() {
         }
         snowy::file file(loop, path);
         loop.run(readonly(file));
+#ifdef __APPLE__
+        bool rejected = false;
+        try { snowy::file invalid(loop, path, snowy::file::mode::read, true); }
+        catch (const std::system_error& e) { rejected = e.code() == std::errc::operation_not_supported; }
+        check(rejected);
+#else
+        snowy::file unbuffered(loop, path, snowy::file::mode::read_write, true);
+        loop.run(direct(unbuffered));
+#endif
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
