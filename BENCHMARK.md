@@ -18,6 +18,12 @@ cmake --build build --config Release --parallel
 ./build/bench/snowy_uring 100000 1
 ./build/bench/snowy_uring 100000 32
 ./build/bench/snowy_uring 100000 128
+# Linux: identical raw/wrapped random reads; path must already exist
+./build/bench/snowy_storage fixed-direct /path/to/existing-file 10000 32 4096
+./build/bench/snowy_storage iopoll /path/to/existing-file 10000 32 4096
+# Continuous loopback receive with an independent sender thread
+./build/bench/snowy_rx single 10000 2048
+./build/bench/snowy_rx multi 10000 2048 # Linux 6.0+ provided-buffer rings
 ```
 
 With MSVC, executables are under `build/bench/Release` and end in `.exe`.
@@ -45,6 +51,16 @@ With MSVC, executables are under `build/bench/Release` and end in `.exe`.
   count, queue depth and 256-entry rings, no SQPOLL. Alternating run order.
   Snowy additionally provides wakeups, cancellation state and a 64-resume
   fairness budget. This isolates wrapper/scheduler cost, not disk or TCP speed.
+- Storage: `buffered`, `direct`, `fixed`, `fixed-direct`, `iopoll`, `sqpoll`.
+  Fixed modes register both files and buffers; polling modes also use direct I/O.
+  Raw/wrapped pairs share offsets, depth, ring flags and buffer sizes; allocation,
+  open and registration are excluded. Report nine alternating run means after
+  warmup. Direct modes require 4096-byte multiples and filesystem/device support;
+  unsupported modes fail explicitly. No file is created, modified or cache-evicted.
+- RX: single-shot or Linux multishot with 256 provided buffers, one blocking
+  sender thread, nine samples after warmup. Reports median/min/max payload MiB/s;
+  byte validation and EOF are timed, accept and buffer allocation are not.
+  Run both modes repeatedly with matching sizes; loopback is not NIC throughput.
 - Record commit, OS/kernel, CPU, compiler/STL, flags, liburing, affinity and
   power settings alongside stdout. Use the same environment for comparisons;
   do not use shared CI runners for performance claims.
@@ -78,5 +94,6 @@ archive via `URING_LIBRARY` (its shared library omits `io_uring_enable_rings`).
 The reference also requires a standard library with `std::format`.
 
 CI executes comparisons as smoke tests only; publish rankings only after repeated
-runs on controlled hardware. Multishot, zero-copy and cross-loop channel throughput
-are outside this suite; do not infer their performance from these workloads.
+runs on controlled hardware. Condy comparison does not yet cover storage or RX;
+those targets compare raw/wrapped I/O or Snowy's receive modes. Zero-copy and
+cross-loop channel throughput are not measured by this suite.

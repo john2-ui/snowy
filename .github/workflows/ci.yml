@@ -108,7 +108,9 @@ jobs:
         if: runner.os == 'Linux'
         env:
           SNOWY_REQUIRE_ADVANCED: '1'
-        run: ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail)$'
+        run: |
+          ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail)$'
+          ./build/bench/snowy_rx multi 1000 2048
 
       - name: Comparison smoke run (not a performance ranking)
         if: runner.os == 'Linux' && matrix.config == 'Release'
