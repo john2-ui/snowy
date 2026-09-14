@@ -117,6 +117,12 @@ openat returns an owning `uring::fd`. waitid requires liburing 2.6+/Linux 6.7+.
 - `send_zc` waits for both send completion and any release notification before
   returning; sends may be partial and the kernel may internally copy. This is
   zero-copy TX, **not ZCRX**; zero-copy RX is not implemented.
+- `zc_send::sent()` releases socket send serialization at the primary CQE;
+  always await `join()` before buffer reuse/destruction. Failed sends drain first.
+  `sendmsg_zc` supports scatter/gather TX with release-notification draining.
+- `recv(..., token, true)` enables receive bundles (Linux 6.10+); buffer IDs follow
+  publication order, including out-of-order lease returns. UDP `recvmsg` preserves
+  empty datagrams, sender/control metadata and explicit truncation flags.
 
 Advanced features require suitable kernels (multishot RX and SEND_ZC: 6.0+) and
 device support where applicable. Opcode probing cannot establish every flag or

@@ -5,11 +5,13 @@
 #pragma once
 #include "snowy/detail/io.hpp"
 #include "snowy/socket.hpp"
+#include "snowy/udp.hpp"
 #include "snowy/event.hpp"
 #include <liburing.h>
 #include <span>
 #include <new>
 #include <array>
+#include <algorithm>
 
 // Linux UAPI embeds a zero-length command array in SQEs. GCC diagnoses its
 // use in class/coroutine storage even when liburing is a system include.
@@ -47,6 +49,8 @@ public:
     static bool* direction(socket& socket, bool write);
     /** @brief Adopt an accepted descriptor. @param loop Owner. @param fd Transferred fd. */
     static socket adopt(loop& loop, int fd);
+    /** @brief Borrow the datagram socket's native ownership state. @param socket UDP owner. */
+    static snowy::socket& socket_of(udp& socket);
     /** @brief Reserve a batch before publishing. @param loop Owner. @param count Slots.
      *  @param drain Wake the internal poll before publishing the chain. */
     static void reserve(loop& loop, unsigned count, bool drain = false);
@@ -225,6 +229,50 @@ task<std::vector<int>> submit(loop& loop, std::span<const io_uring_sqe> entries,
 /** @brief Zero-copy send from registered memory. @param socket Peer. @param table Buffer table.
  *  @param index Buffer slot. @param token Cancellation. @return Partial sent byte count. */
 [[nodiscard]] op send_zc(socket& socket, buffers& table, unsigned index, std::stop_token token = {});
+/** @brief Split zero-copy send completion from buffer release for pipelining.
+ *  @details Await sent() once, then join() before destruction or buffer reuse.
+ *  A failed sent() already drains kernel references before throwing. The socket,
+ *  table and loop outlive this object. Buffer ownership remains with the caller. */
+class zc_send : public op {
+    event sent_, released_;
+    bool started_ = false;
+    /** @brief Bind shared send/release handling. @param socket Peer. @param sqe Prepared send.
+     *  @param token Cancellation. @param table Optional pinned buffer table. */
+    zc_send(socket& socket, io_uring_sqe sqe, std::stop_token token, buffers* table);
+    /** @brief Submit exactly once, including immediate cancellation completion. */
+    void start();
+public:
+    /** @brief Borrow immutable bytes. @param socket Peer. @param data Source. @param token Cancellation. */
+    zc_send(socket& socket, std::span<const std::byte> data, std::stop_token token = {});
+    /** @brief Borrow registered bytes. @param socket Peer. @param table Buffer table.
+     *  @param index Slot. @param token Cancellation. */
+    zc_send(socket& socket, buffers& table, unsigned index, std::stop_token token = {});
+    /** @brief First-CQE waiter, embedded in the consumer frame. */
+    struct awaiter {
+        zc_send& source;
+        event::awaiter ready;
+        /** @brief Bind the noncancelable primary barrier. @param source Send state. */
+        explicit awaiter(zc_send& source) : source(source), ready(source.sent_.join()) {}
+        /** @brief Enter the one-shot submission hook. */
+        bool await_ready() const noexcept { return false; }
+        /** @brief Submit and await primary completion. @param h Continuation. */
+        bool await_suspend(std::coroutine_handle<> h) { source.start(); return ready.await_suspend(h); }
+        /** @brief Return the partial byte count, or throw after failed-send cleanup. */
+        std::size_t await_resume() { return source.detail::io::await_resume(); }
+    };
+    /** @brief Start and await sent bytes; success does not permit buffer reuse yet. */
+    [[nodiscard]] awaiter sent() { return awaiter{*this}; }
+    /** @brief Wait until the buffer is reusable, including shutdown/cancellation cleanup. */
+    [[nodiscard]] event::awaiter join() {
+        if (!started_) throw std::logic_error("zero-copy send not started");
+        return released_.join();
+    }
+    bool await_suspend(std::coroutine_handle<>) = delete; ///< Use sent()/join(), never await this object directly.
+};
+
+/** @brief Send gathered bytes with zero-copy notification draining. @param socket Peer.
+ *  @param message Borrowed header, vectors and payload. @param token Cancellation. */
+[[nodiscard]] op sendmsg_zc(socket& socket, const msghdr& message, std::stop_token token = {});
 
 /** @brief Owned provided-buffer ring; all access and lease destruction is owner-thread.
  *  @details Keep alive until every stream and chunk is destroyed. Full exhaustion
@@ -263,10 +311,35 @@ public:
     };
     /** @brief Decode a kernel-selected buffer. @param flags CQE flags. @param size Nonnegative received size. */
     chunk take(unsigned flags, unsigned size);
+    /** @brief Decode a bundled CQE in publication order, even after out-of-order returns.
+     *  @param flags CQE flags. @param size Total received bytes. @param fn Consumer of each chunk.
+     *  @details On callback failure, return the unconsumed leases before rethrowing. */
+    template <typename F>
+    void each(unsigned flags, unsigned size, F fn) {
+        const unsigned parts = size ? (size - 1) / size_ + 1 : 1;
+        if (parts > count_) throw std::runtime_error("invalid receive bundle size");
+        unsigned id = flags >> IORING_CQE_BUFFER_SHIFT;
+        std::exception_ptr failure;
+        for (unsigned i = 0; i < parts; ++i) {
+            if (id >= count_) throw std::runtime_error("invalid receive bundle ID");
+            const unsigned next = next_[id]; // Returning this lease may change its next publication.
+            const unsigned bytes = std::min(size, size_);
+            auto value = take((flags & 0xffffu) | (id << IORING_CQE_BUFFER_SHIFT), bytes);
+            size -= bytes;
+            if (!failure) {
+                try { std::invoke(fn, std::move(value)); }
+                catch (...) { failure = std::current_exception(); }
+            }
+            id = next;
+        }
+        if (failure) std::rethrow_exception(failure);
+    }
     /** @brief Wait for a returned lease if every buffer is held. @param token Cancellation. */
     task<> available(std::stop_token token);
     /** @brief Return the native group ID. */
     unsigned short group() const noexcept { return group_; }
+    /** @brief Return the byte capacity of one provided buffer. */
+    unsigned size() const noexcept { return size_; }
 private:
     friend class stream;
     loop& loop_;
@@ -275,6 +348,8 @@ private:
     memory data_, ring_memory_;
     io_uring_buf_ring* ring_;
     std::vector<bool> held_;
+    std::vector<unsigned short> next_; ///< Publication successor, not numeric ID successor.
+    unsigned tail_; ///< Last published buffer ID.
     event returned_;
     /** @brief Publish a returned buffer. @param id Previously leased slot. */
     void put(unsigned id) noexcept;
@@ -301,25 +376,87 @@ private:
     provided* table_;
 };
 
+/** @brief Received datagram owning its provided-buffer lease, including metadata.
+ *  @details bytes/name/control remain valid until this message is destroyed.
+ *  MSG_TRUNC/MSG_CTRUNC expose truncation; wire_size is the original payload length. */
+struct message {
+    provided::chunk storage;
+    std::span<const std::byte> bytes, name, control;
+    unsigned flags = 0, wire_size = 0;
+    /** @brief Validate and decode one recvmsg completion. @param data Owned lease.
+     *  @param layout Input metadata capacities, not the output lengths. */
+    message(provided::chunk data, msghdr layout);
+};
+
+/** @brief Receive datagrams with multishot recvmsg and owned metadata/payload.
+ *  @param socket UDP peer. @param table Provided buffers. @param fn Owned bool(message) consumer.
+ *  @param token Cancellation. @param control Ancillary byte capacity per message.
+ *  @details False stops normally. Empty datagrams are delivered; callback failures drain first. */
+template <typename F>
+task<> recvmsg(udp& socket, provided& table, F fn, std::stop_token token = {}, unsigned control = 0) {
+    auto& native = access::socket_of(socket);
+    msghdr layout{};
+    layout.msg_namelen = sizeof(sockaddr_storage);
+    layout.msg_controllen = control;
+    if (std::uint64_t{control} + sizeof(sockaddr_storage) + sizeof(io_uring_recvmsg_out) > table.size())
+        throw std::invalid_argument("recvmsg metadata exceeds provided buffer");
+    struct context { provided& table; F& fn; msghdr& layout; } context{table, fn, layout};
+    for (;;) {
+        io_uring_sqe sqe{};
+        io_uring_prep_recvmsg_multishot(&sqe, native.native_handle(), &layout, MSG_TRUNC);
+        sqe.flags |= IOSQE_BUFFER_SELECT;
+        sqe.buf_group = table.group();
+        stream request(native, sqe, token, &table, &context,
+            [](stream& request, int res, unsigned flags) {
+                auto& ctx = *static_cast<struct context*>(request.context);
+                if (flags & IORING_CQE_F_BUFFER) {
+                    auto chunk = ctx.table.take(flags, res > 0 ? static_cast<unsigned>(res) : 0);
+                    if (res >= 0 && !request.stopped && !std::invoke(ctx.fn, message{std::move(chunk), ctx.layout}))
+                        request.stop();
+                } else if (res >= 0) throw std::runtime_error("recvmsg missing buffer ID");
+            });
+        try { co_await request; }
+        catch (const std::system_error& e) {
+            if (request.failure) std::rethrow_exception(request.failure);
+            if (request.stopped && e.code() == std::errc::operation_canceled) co_return;
+            if (e.code().value() != ENOBUFS) throw;
+        }
+        if (request.failure) std::rethrow_exception(request.failure);
+        if (request.stopped) co_return;
+        co_await table.available(token);
+    }
+}
+
 /** @brief Receive a TCP byte stream with multishot and owned buffer leases.
  *  @param socket Peer. @param table Provided buffers. @param fn Owned short callback,
  *  bool(chunk); false stops normally. It may transfer chunks to another owner-thread consumer.
- *  @param token Cancellation. @details Rearms on kernel termination/ENOBUFS, never
+ *  @param token Cancellation. @param bundle Fill multiple buffers per CQE (Linux 6.10+).
+ *  @details Rearms on kernel termination/ENOBUFS, never
  *  falls back to single-shot. EOF returns; callback errors rethrow after cleanup. */
 template <typename F>
-task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}) {
-    struct context { provided& table; F& fn; } context{table, fn};
+task<> recv(socket& socket, provided& table, F fn, std::stop_token token = {}, bool bundle = false) {
+#ifndef IORING_RECVSEND_BUNDLE
+    if (bundle) throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "receive bundles need newer liburing");
+#endif
+    struct context { provided& table; F& fn; bool bundle; } context{table, fn, bundle};
     for (;;) {
         io_uring_sqe sqe{};
         io_uring_prep_recv_multishot(&sqe, socket.native_handle(), nullptr, 0, 0);
+#ifdef IORING_RECVSEND_BUNDLE
+        if (bundle) sqe.ioprio |= IORING_RECVSEND_BUNDLE;
+#endif
         sqe.flags |= IOSQE_BUFFER_SELECT;
         sqe.buf_group = table.group();
         stream request(socket, sqe, token, &table, &context,
             [](stream& request, int res, unsigned flags) {
                 auto& ctx = *static_cast<struct context*>(request.context);
                 if (flags & IORING_CQE_F_BUFFER) {
-                    auto chunk = ctx.table.take(flags, res > 0 ? static_cast<unsigned>(res) : 0);
-                    if (res > 0 && !request.stopped && !std::invoke(ctx.fn, std::move(chunk))) request.stop();
+                    auto consume = [&](provided::chunk chunk) {
+                        if (res > 0 && !request.stopped && !std::invoke(ctx.fn, std::move(chunk))) request.stop();
+                    };
+                    const auto size = res > 0 ? static_cast<unsigned>(res) : 0;
+                    if (ctx.bundle) ctx.table.each(flags, size, consume);
+                    else consume(ctx.table.take(flags, size));
                 } else if (res > 0) throw std::runtime_error("multishot missing buffer ID");
             });
         try { co_await request; }

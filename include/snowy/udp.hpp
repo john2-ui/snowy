@@ -31,6 +31,9 @@ public:
     task<std::size_t> send(std::span<const std::byte> buffer, endpoint peer,
                            std::stop_token token = {});
 private:
+#ifdef __linux__
+    friend class uring::access;
+#endif
     socket socket_;
     /** @brief Open a datagram socket. @param family Address family. */
     static detail::socket_id open(int family);
