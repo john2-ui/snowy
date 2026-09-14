@@ -46,7 +46,7 @@ jobs:
               -G "Visual Studio 17 2022" -A x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install liburing
         if: runner.os == 'Linux'
@@ -69,8 +69,30 @@ jobs:
         shell: bash
         run: cmake -S . -B build -DSNOWY_BUILD_BENCHMARKS=ON ${{ matrix.configure }}
 
+      - name: Checkout benchmark reference
+        if: runner.os == 'Linux' && matrix.config == 'Release'
+        uses: actions/checkout@v6
+        with:
+          repository: condy-cpp/condy
+          ref: 01dcf995b711e67ac4416a07fdfe6347a388ad14
+          path: build-condy
+
+      - name: Configure comparison
+        if: runner.os == 'Linux' && matrix.config == 'Release'
+        shell: bash
+        run: |
+          cmake -S . -B build -DSNOWY_CONDY_INCLUDE_DIR="$PWD/build-condy/include" \
+            -DURING_LIBRARY="$(g++-14 -print-file-name=liburing.a)"
+
       - name: Build
         run: cmake --build build --config ${{ matrix.config }} --parallel
 
       - name: Test
         run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
+
+      - name: Comparison smoke run (not a performance ranking)
+        if: runner.os == 'Linux' && matrix.config == 'Release'
+        run: |
+          ./build/bench/snowy_compare task 1000000
+          ./build/bench/snowy_compare schedule 1000000
+          ./build/bench/snowy_compare nop 10000 32
