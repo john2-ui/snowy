@@ -35,6 +35,7 @@ ctest --test-dir build -C Release --output-on-failure
 For embedding, use `add_subdirectory(snowy)` and link `snowy::snowy`.
 Optional targets: `SNOWY_BUILD_TESTS`, `SNOWY_BUILD_EXAMPLES` (both default ON).
 See [timer](examples/timer.cpp) and the self-contained [TCP echo](examples/echo.cpp).
+Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md).
 
 ## Contracts
 

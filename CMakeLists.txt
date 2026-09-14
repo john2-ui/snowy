@@ -4,6 +4,7 @@ project(snowy VERSION 0.1.0 LANGUAGES CXX)
 
 option(SNOWY_BUILD_TESTS "Build Snowy tests" ON)
 option(SNOWY_BUILD_EXAMPLES "Build Snowy examples" ON)
+option(SNOWY_BUILD_BENCHMARKS "Build Snowy benchmarks" OFF)
 find_package(Threads REQUIRED)
 
 add_library(snowy STATIC src/loop.cpp src/socket.cpp)
@@ -50,4 +51,8 @@ endif()
 
 if(SNOWY_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(SNOWY_BUILD_BENCHMARKS)
+    add_subdirectory(bench)
 endif()
