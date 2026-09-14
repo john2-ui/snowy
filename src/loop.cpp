@@ -213,18 +213,22 @@ void loop::run() {
     try {
         std::vector<std::function<void()>> batch;
         for (;;) {
+            detail::ready_queue messages;
             {
                 std::lock_guard lock(mutex_);
                 batch.swap(posts_);
+                // Detach a bounded batch under the existing post lock; callbacks run unlocked.
+                for (unsigned i = 0; i < budget_; ++i) {
+                    auto* node = messages_.pop();
+                    if (!node) break;
+                    messages.push(*node);
+                }
             }
             for (auto& fn : batch) {
                 try { fn(); } catch (...) { fail(); }
             }
             batch.clear();
-            for (unsigned i = 0; i < budget_; ++i) {
-                detail::ready_operation* node;
-                { std::lock_guard lock(mutex_); node = messages_.pop(); }
-                if (!node) break;
+            while (auto* node = messages.pop()) {
                 auto& msg = *static_cast<detail::message*>(node);
                 msg.run(msg);
             }
