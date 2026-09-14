@@ -1,0 +1,6 @@
+/build*/
+/.cache/
+/Testing/
+/CMakeUserPresets.json
+*.csv
+perf.data*
