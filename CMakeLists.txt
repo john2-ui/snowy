@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(snowy VERSION 0.1.0 LANGUAGES CXX)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    message(FATAL_ERROR "Snowy supports GCC 14+; use a modern GCC or Clang for correct coroutine temporary lifetimes")
+endif()
 
 option(SNOWY_BUILD_TESTS "Build Snowy tests" ON)
 option(SNOWY_BUILD_EXAMPLES "Build Snowy examples" ON)
@@ -18,10 +21,6 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
-    target_compile_options(snowy PUBLIC -fcoroutines)
-endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_path(URING_INCLUDE_DIR liburing.h REQUIRED)

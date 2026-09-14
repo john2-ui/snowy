@@ -22,7 +22,8 @@ int main() {
 
 ## Build
 
-Requires CMake 3.20+, C++20 coroutines and `std::stop_token`. Linux requires
+Requires CMake 3.20+, C++20 coroutines and `std::stop_token`; use GCC 14+ or Clang 18+.
+Older GCC versions are not supported due to coroutine temporary-lifetime issues. Linux requires
 liburing 2.3+ and a kernel with io_uring enabled (tested on 5.15). Clang can
 use libstdc++; with libc++, use version 20+. Windows targets MSVC 2022.
 Native backend tests run through the GitHub Actions matrix when CI is enabled.
