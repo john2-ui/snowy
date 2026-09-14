@@ -53,15 +53,45 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
 - `stop()` permanently cancels pending/future I/O and timers. Root failures
   stop siblings and are rethrown after cleanup; CPU work must yield cooperatively.
 - `event` and `channel<T>` are owner-thread primitives. Channels provide bounded
-  buffering and close/drain; `T` must be nothrow move-constructible.
-- `when_all` joins a vector of same-result tasks. `when_any`/`timeout` take
+  buffering, zero-capacity rendezvous, `try_send`/`try_recv`, and close/drain;
+  `T` must be nothrow move-constructible. Send/receive are direct awaiters, not tasks.
+- `when_all` joins a vector of same-result tasks or a typed task pack into a tuple.
+  `when_any`/`timeout` take
   token-aware factories and drain canceled children before returning; timeout is
-  cooperative, not a guarantee that cleanup finishes at the deadline.
+  cooperative, not a guarantee that cleanup finishes at the deadline. Typed
+  factories may be move-only; fixed-count result slots live in the parent frame.
 - `pool::run` executes owned CPU/blocking functions on workers and resumes on the
   calling loop. Running jobs are drained on cancellation; I/O does not migrate.
 - Files use explicit offsets. Open/close are synchronous; macOS read/write/flush
   and Windows flush use two shared workers. Linux read/write/flush and Windows
   read/write use native completions. Exclusive `mode::create` never truncates.
+
+## Linux fast paths
+
+Explicitly include `<snowy/uring.hpp>`; the portable API does not require it.
+See the [registered-file example](examples/fixed.cpp).
+
+- `loop(uring::options)` configures SQ/CQ sizes, scheduling budget, SQPOLL,
+  IOPOLL and task-run flags. Requested unsupported modes fail, never silently downgrade.
+- `uring::memory`, `files` and `buffers` own aligned storage or kernel registrations.
+  Registered memory must outlive its table, and tables must outlive every referencing
+  operation. `file(..., direct=true)` requests direct I/O on Linux/Windows;
+  alignment constraints depend on the filesystem/device. macOS rejects this mode.
+- `uring::submit` batches one-shot SQEs with soft/hard links and DRAIN, returning
+  raw results in input order. DRAIN requires earlier user I/O to finish naturally;
+  do not place it behind long-lived receives/polls that need later cancellation.
+  It excludes Snowy's internal wake poll; external wake checks are then bounded to 1 ms.
+- `uring::accept`/`recv` use multishot requests. `provided::chunk` owns a buffer
+  lease; release it on the owner thread. Exhaustion waits for returned buffers.
+  Callback exceptions cancel and drain the request before propagating.
+- `send_zc` waits for both send completion and any release notification before
+  returning; sends may be partial and the kernel may internally copy. This is
+  zero-copy TX, **not ZCRX**; zero-copy RX is not implemented.
+
+Advanced features require suitable kernels (multishot RX and SEND_ZC: 6.0+) and
+device support where applicable. Opcode probing cannot establish every flag or
+hardware prerequisite. IOPOLL rings are storage-only. Native tests report skips
+on older kernels; Linux CI requires the advanced networking paths to execute.
 
 Optimization ideas are informed by [Condy](https://github.com/condy-cpp/condy),
 including symmetric transfer, coroutine-owned requests and batch processing.
