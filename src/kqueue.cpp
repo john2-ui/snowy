@@ -22,7 +22,8 @@ loop::loop() : driver_(std::make_unique<driver>()) {
 }
 
 loop::~loop() {
-    if (running_ || roots_ || io_ || waits_ || !timers_.empty() || !ready_.empty()) std::terminate();
+    if (running_ || roots_ || io_ || waits_ || holds_ || !messages_.empty()
+        || !timers_.empty() || !ready_.empty()) std::terminate();
     ::close(driver_->queue);
 }
 

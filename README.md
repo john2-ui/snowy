@@ -37,7 +37,7 @@ For embedding, use `add_subdirectory(snowy)` and link `snowy::snowy`.
 Optional targets: `SNOWY_BUILD_TESTS`, `SNOWY_BUILD_EXAMPLES` (both default ON).
 See [timer](examples/timer.cpp) and the self-contained [TCP echo](examples/echo.cpp).
 Also see [UDP with timeout](examples/datagram.cpp), [file reads](examples/read.cpp),
-and a [parallel pipeline](examples/pipeline.cpp).
+a [parallel pipeline](examples/pipeline.cpp), and [cross-thread messages](examples/mailbox.cpp).
 Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md).
 
 ## Contracts
@@ -48,7 +48,10 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
   `<snowy/pmr.hpp>` provides `pmr::task<T>`. The resource outlives frame destruction
   and must support the threads that allocate/free it. Children choose independently.
 - Construct, run and destroy a loop on its owner thread. `run()` drains roots
-  and posts, returning at idle. Only `post`, `stop` and stop tokens are thread-safe.
+  and posts, returning at idle. `post`, `stop` and `keep_alive` are thread-safe.
+  Hold a keep-alive guard before starting an otherwise idle destination loop.
+  `co_await target.on()` migrates execution, not I/O ownership; root/join cleanup
+  returns to the originating loop. The destination must remain alive until delivery.
 - Buffers, sockets and the loop must outlive pending operations. A socket
   allows one read and one write concurrently; do not move it while busy.
 - Reads/writes may be partial. Use `write_all` to send a whole buffer.
@@ -58,6 +61,9 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
 - `event` and `channel<T>` are owner-thread primitives. Channels provide bounded
   buffering, zero-capacity rendezvous, `try_send`/`try_recv`, and close/drain;
   `T` must be nothrow move-constructible. Send/receive are direct awaiters, not tasks.
+- `mailbox<T>` shares the same FIFO semantics across threads: `send(loop, value)`
+  and `recv(loop)` resume on the supplied loop. `futex<T>` awaits an external
+  atomic; store before notifying and recheck the predicate after wakeup.
 - `when_all` joins a vector of same-result tasks or a typed task pack into a tuple.
   `when_any`/`timeout` take
   token-aware factories and drain canceled children before returning; timeout is

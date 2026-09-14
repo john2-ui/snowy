@@ -24,6 +24,13 @@ namespace detail {
 struct io;
 struct wait;
 
+/** @brief Intrusive cross-thread delivery; storage survives until run() consumes it. */
+struct message : ready_operation {
+    void (*run)(message&) noexcept = nullptr;
+    /** @brief Publish once without allocation. @param target Live destination loop. */
+    void send(loop& target) noexcept;
+};
+
 /** @brief Coroutine-owned ready node; queued once and consumed on its loop. */
 struct work : ready_operation {
     std::coroutine_handle<> handle;
@@ -55,7 +62,7 @@ struct op : work {
 };
 } // namespace detail
 
-/** @brief Owner-thread loop; only post(), stop() and stop tokens are thread-safe.
+/** @brief Owner-thread loop with thread-safe posting, stopping and keep-alive guards.
  *  @details Construct, run, and destroy on the same thread. run() drains spawned
  *  tasks and queued posts, then returns at idle. Keep the loop alive until all
  *  producers have stopped posting. Destroying a loop with live tasks terminates.
@@ -99,6 +106,41 @@ public:
     bool stopped() const noexcept { return stopping_.load(std::memory_order_relaxed); }
     /** @brief Verify thread affinity. @throws std::logic_error on a wrong thread. */
     void check() const;
+
+    /** @brief Return the loop currently executing on this thread, or nullptr. */
+    static loop* current() noexcept { return current_; }
+    /** @brief Keep an idle loop running; must be destroyed before its loop. */
+    class guard {
+        loop* owner_;
+    public:
+        /** @brief Acquire a thread-safe work reference. @param owner Live loop. */
+        explicit guard(loop& owner) noexcept : owner_(&owner) { ++owner_->holds_; }
+        guard(const guard&) = delete;
+        guard& operator=(const guard&) = delete;
+        /** @brief Transfer the work reference. @param other Consumed guard. */
+        guard(guard&& other) noexcept : owner_(std::exchange(other.owner_, nullptr)) {}
+        /** @brief Release the reference and wake an idle loop. */
+        ~guard() { if (owner_) { --owner_->holds_; owner_->wake(); } }
+    };
+    /** @brief Prevent idle exit until guard destruction; stop still permits exit. */
+    [[nodiscard]] guard keep_alive() noexcept { return guard{*this}; }
+    /** @brief One-shot migration; the destination must stay alive until delivery. */
+    struct hop : detail::message {
+        loop& owner;
+        std::coroutine_handle<> handle;
+        /** @brief Bind the destination. @param target Live destination loop. */
+        explicit hop(loop& target) : owner(target) {
+            run = [](detail::message& msg) noexcept { static_cast<hop&>(msg).handle.resume(); };
+        }
+        /** @brief Avoid dispatch when already executing on the destination. */
+        bool await_ready() const noexcept { return current() == &owner; }
+        /** @brief Publish the suspended frame. @param h Continuation. */
+        void await_suspend(std::coroutine_handle<> h) noexcept { handle = h; send(owner); }
+        /** @brief Continue on the destination thread, including during shutdown. */
+        void await_resume() const noexcept {}
+    };
+    /** @brief Migrate execution; existing I/O objects retain their original affinity. */
+    [[nodiscard]] hop on() { return hop{*this}; }
 
     /** @brief Allocation-free cooperative yield. */
     struct yield : detail::work {
@@ -146,6 +188,7 @@ private:
     friend struct detail::op::cancel_fn;
     friend struct detail::io;
     friend struct detail::wait;
+    friend struct detail::message;
     struct driver;
     std::unique_ptr<driver> driver_;
     std::thread::id thread_ = std::this_thread::get_id();
@@ -153,6 +196,9 @@ private:
     std::vector<timer*> timers_;
     std::mutex mutex_;
     std::vector<std::function<void()>> posts_;
+    detail::ready_queue messages_;
+    std::atomic_size_t holds_{0};
+    static thread_local loop* current_;
     std::atomic_bool stopping_{false};
     std::atomic_bool cancel_{false};
     std::size_t roots_ = 0;
@@ -166,8 +212,11 @@ private:
     template <typename A>
     detail::detached start(task<void, A> input) {
         ++roots_;
+        std::exception_ptr error;
         try { co_await schedule(); co_await std::move(input); }
-        catch (...) { fail(); }
+        catch (...) { error = std::current_exception(); }
+        co_await on(); // Child tasks may have migrated to another loop.
+        if (error) { if (!error_) error_ = error; stop(); }
         --roots_;
     }
     /** @brief Record the first error and cancel remaining work. */

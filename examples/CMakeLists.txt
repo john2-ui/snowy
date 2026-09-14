@@ -1,4 +1,4 @@
-foreach(example timer echo pipeline datagram read)
+foreach(example timer echo pipeline datagram read mailbox)
     add_executable(snowy_${example} ${example}.cpp)
     target_link_libraries(snowy_${example} PRIVATE snowy::snowy)
     if(SNOWY_BUILD_TESTS)

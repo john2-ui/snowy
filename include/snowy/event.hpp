@@ -9,6 +9,7 @@ struct wait : op {
     wait* next = nullptr;
     wait* prev = nullptr;
     bool interruptible;
+    void (*interrupt)(wait&) noexcept = nullptr; ///< Optional synchronized cancellation hook.
     /** @brief Bind a wait. @param loop Owner. @param cancelable Honor stop requests. */
     wait(loop& loop, bool cancelable) : op(loop), interruptible(cancelable) {}
     /** @brief Park once. @param h Continuation. @param token Optional cancellation. */

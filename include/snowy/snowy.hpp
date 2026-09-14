@@ -11,6 +11,8 @@
 #include "snowy/socket.hpp"
 #include "snowy/event.hpp"
 #include "snowy/channel.hpp"
+#include "snowy/mailbox.hpp"
+#include "snowy/futex.hpp"
 #include "snowy/pool.hpp"
 #include "snowy/when.hpp"
 #include "snowy/udp.hpp"

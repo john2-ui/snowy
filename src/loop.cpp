@@ -6,6 +6,14 @@
 #include <limits>
 
 namespace snowy {
+thread_local loop* loop::current_ = nullptr;
+
+void detail::message::send(loop& target) noexcept {
+    std::lock_guard lock(target.mutex_);
+    const bool empty = target.messages_.empty();
+    target.messages_.push(*this);
+    if (empty) target.wake();
+}
 namespace {
 /** @brief Order the earliest timer first. @param a Left timer. @param b Right timer. */
 bool later(const loop::timer* a, const loop::timer* b) { return a->due > b->due; }
@@ -179,8 +187,11 @@ void loop::expire() {
         for (auto* w = waits_; w;) {
             auto* next = w->next;
             if (w->interruptible && (all || w->canceled.load(std::memory_order_relaxed))) {
-                w->error = std::make_error_code(std::errc::operation_canceled);
-                w->notify();
+                if (w->interrupt) w->interrupt(*w);
+                else {
+                    w->error = std::make_error_code(std::errc::operation_canceled);
+                    w->notify();
+                }
             }
             w = next;
         }
@@ -198,6 +209,7 @@ void loop::run() {
     check();
     if (running_) throw std::logic_error("nested loop.run");
     running_ = true;
+    auto* previous = std::exchange(current_, this);
     try {
         std::vector<std::function<void()>> batch;
         for (;;) {
@@ -209,6 +221,13 @@ void loop::run() {
                 try { fn(); } catch (...) { fail(); }
             }
             batch.clear();
+            for (unsigned i = 0; i < budget_; ++i) {
+                detail::ready_operation* node;
+                { std::lock_guard lock(mutex_); node = messages_.pop(); }
+                if (!node) break;
+                auto& msg = *static_cast<detail::message*>(node);
+                msg.run(msg);
+            }
             expire();
             // Bound cooperative work between polls so I/O and timers progress.
             for (unsigned i = 0; i < budget_; ++i) {
@@ -219,9 +238,10 @@ void loop::run() {
             bool posted;
             {
                 std::lock_guard lock(mutex_);
-                posted = !posts_.empty();
+                posted = !posts_.empty() || !messages_.empty();
             }
-            if (!roots_ && !io_ && !waits_ && timers_.empty() && ready_.empty() && !posted) break;
+            if (!roots_ && !io_ && !waits_ && timers_.empty() && ready_.empty() && !posted
+                && (!holds_.load() || stopped())) break;
             // Ready-only work needs no kernel poll; each tick still checks posts,
             // cancellation and deadlines. Pending I/O retains the polling budget.
             if (!io_ && (!ready_.empty() || posted)) continue;
@@ -234,10 +254,12 @@ void loop::run() {
             poll(delay);
         }
     } catch (...) {
+        current_ = previous;
         running_ = false;
         throw;
     }
     running_ = false;
+    current_ = previous;
     if (auto error = std::exchange(error_, {})) std::rethrow_exception(error);
 }
 } // namespace snowy

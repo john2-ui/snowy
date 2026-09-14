@@ -34,10 +34,16 @@ template <typename T, typename A>
 detached collect(task<T, A> input, join& state, std::optional<result<T>>& value, std::size_t index, bool race) {
     co_await state.owner.schedule();
     std::exception_ptr error;
+    std::optional<result<T>> local;
     try {
-        if constexpr (std::is_void_v<T>) { co_await std::move(input); value.emplace(); }
-        else value.emplace(co_await std::move(input));
+        if constexpr (std::is_void_v<T>) { co_await std::move(input); local.emplace(); }
+        else local.emplace(co_await std::move(input));
     } catch (...) { error = std::current_exception(); }
+    co_await state.owner.on();
+    if (!error) {
+        try { value.emplace(std::move(*local)); }
+        catch (...) { error = std::current_exception(); }
+    }
     if (race) {
         if (!state.winner) {
             state.winner = index;
