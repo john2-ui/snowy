@@ -94,6 +94,37 @@ snowy::task<> fail(snowy::loop& loop, snowy::socket& listener) {
     std::array<std::byte, 4096> data;
     while (co_await peer.read(data)) {}
 }
+/** @brief Race cancellation with send/release CQEs, then overwrite borrowed memory.
+ *  @param loop Owner. @param address Listener. */
+snowy::task<> cancel_zc(snowy::loop& loop, snowy::endpoint address) {
+    auto peer = co_await snowy::socket::connect(loop, address);
+    const int size = 4096;
+    check(setsockopt(peer.native_handle(), SOL_SOCKET, SO_SNDBUF, &size, sizeof(size)) == 0);
+    snowy::uring::memory memory(65536);
+    auto data = memory.bytes();
+    const iovec region{data.data(), data.size()};
+    snowy::uring::buffers buffers(loop, std::span(&region, 1));
+    for (unsigned i = 0; i < 16; ++i) {
+        std::fill(data.begin(), data.end(), std::byte{42});
+        std::stop_source stop;
+        snowy::event posted(loop);
+        loop.post([&] { stop.request_stop(); posted.set(); });
+        try { check((co_await snowy::uring::send_zc(peer, buffers, 0, stop.get_token())) <= data.size()); }
+        catch (const std::system_error& e) { check(e.code() == std::errc::operation_canceled); }
+        co_await posted.join();
+        std::fill(data.begin(), data.end(), std::byte{7});
+        co_await loop.sleep(std::chrono::milliseconds{1});
+    }
+    peer.shutdown();
+}
+/** @brief Validate all bytes accepted before cancellation, without assuming rollback.
+ *  @param listener Acceptor. */
+snowy::task<> drain(snowy::socket& listener) {
+    auto peer = co_await listener.accept();
+    std::array<std::byte, 8192> data;
+    while (auto n = co_await peer.read(data))
+        for (auto b : std::span(data).first(n)) check(b == std::byte{42});
+}
 /** @brief Run exactly one feature so unsupported tests are visible separately.
  *  @param argc Argument count. @param argv recv, accept, zc, or fail. */
 int main(int argc, char** argv) {
@@ -112,6 +143,10 @@ int main(int argc, char** argv) {
             loop.spawn(send(loop, listener.local(), mode == "zc"));
             if (mode == "fail") loop.run(fail(loop, listener));
             else loop.run(receive(loop, listener, mode == "recv"));
+        }
+        if (mode == "zc") {
+            loop.spawn(cancel_zc(loop, listener.local()));
+            loop.run(drain(listener));
         }
     } catch (const std::system_error& e) {
         if (!std::getenv("SNOWY_REQUIRE_ADVANCED") &&
