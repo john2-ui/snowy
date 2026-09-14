@@ -72,20 +72,20 @@ task<> ticks(loop& loop, std::chrono::nanoseconds interval, F fn, unsigned count
 #endif
 }
 
-/** @brief Read a pipe/tun/other pollable fd with provided buffers (Linux 6.7+, liburing 2.5+).
+/** @brief Read a pipe/tun/other pollable fd with provided buffers (Linux 6.7+, liburing 2.6+).
  *  @param loop Owner. @param fd Borrowed fd. @param table Buffer pool.
  *  @param fn Owned bool(chunk) callback; false stops normally. @param token Cancellation.
  *  @details Not for regular files. EOF ends the task; ENOBUFS waits for leases and rearms.
  *  fd/table outlive completion, and the caller serializes other reads on this fd. */
 template <typename F>
 task<> read(loop& loop, int fd, provided& table, F fn, std::stop_token token = {}) {
-#if defined(IO_URING_VERSION_MAJOR) && (IO_URING_VERSION_MAJOR > 2 || IO_URING_VERSION_MINOR >= 5)
+#if defined(IO_URING_VERSION_MAJOR) && (IO_URING_VERSION_MAJOR > 2 || IO_URING_VERSION_MINOR >= 6)
     io_uring_sqe sqe{};
     io_uring_prep_read_multishot(&sqe, fd, 0, 0, table.group());
     return receive(loop, sqe, table, std::move(fn), token);
 #else
     (void)loop; (void)fd; (void)table; (void)fn; (void)token;
-    throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "multishot read needs liburing 2.5+");
+    throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "multishot read needs liburing 2.6+");
 #endif
 }
 } // namespace snowy::uring
