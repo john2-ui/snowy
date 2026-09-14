@@ -45,7 +45,11 @@ snowy::task<> run(snowy::loop& loop) {
     for (int i = 0; i < 64; ++i) check(*values[i] == i);
     std::vector<snowy::task<>> empty;
     check((co_await snowy::when_all(loop, std::move(empty))).empty());
+    check((co_await snowy::when_all(loop)) == std::tuple<>{});
     bool done = false;
+    auto mixed = co_await snowy::when_all(loop, item(loop, 7), quick(loop), finish(loop, done));
+    check(*std::get<0>(mixed) == 7 && std::get<1>(mixed) == 42 && done);
+    done = false;
     std::vector<std::function<snowy::task<int>(std::stop_token)>> jobs;
     jobs.push_back([&](std::stop_token t) { return slow(loop, t, done); });
     jobs.push_back([&](std::stop_token) { return quick(loop); });
@@ -57,6 +61,11 @@ snowy::task<> run(snowy::loop& loop) {
         co_await snowy::timeout<int>(loop, 1ms,
             [&](std::stop_token t) { return slow(loop, t, done); });
     } catch (const std::system_error& e) { caught = e.code() == std::errc::timed_out; }
+    check(caught && done);
+    done = false;
+    caught = false;
+    try { co_await snowy::when_all(loop, fail(loop), finish(loop, done), item(loop, 8)); }
+    catch (const std::runtime_error&) { caught = true; }
     check(caught && done);
     check((co_await snowy::timeout<int>(loop, 1h,
         [&](std::stop_token) { return quick(loop); })) == 42);
