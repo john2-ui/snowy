@@ -24,6 +24,7 @@ cmake --build build --config Release --parallel
 # Continuous loopback receive with an independent sender thread
 ./build/bench/snowy_rx single 10000 2048
 ./build/bench/snowy_rx multi 10000 2048 # Linux 6.0+ provided-buffer rings
+./build/bench/snowy_rx bundle 10000 2048 # Linux 6.10+, newer liburing
 ```
 
 With MSVC, executables are under `build/bench/Release` and end in `.exe`.
@@ -81,6 +82,9 @@ cmake --build build --parallel
 ./build/bench/snowy_compare task 1000000
 ./build/bench/snowy_compare schedule 1000000
 ./build/bench/snowy_compare nop 10000 32
+./build/bench/snowy_compare_storage fixed-direct /path/to/existing-file 10000 32 4096
+./build/bench/snowy_compare_rx single 10000 2048
+./build/bench/snowy_compare_rx multi 10000 2048
 ```
 
 Both implementations share one binary, compiler/STL and sample procedure.
@@ -93,7 +97,12 @@ mode also runs on older kernels. With liburing 2.3, explicitly select its static
 archive via `URING_LIBRARY` (its shared library omits `io_uring_enable_rings`).
 The reference also requires a standard library with `std::format`.
 
+Storage comparison reuses all six storage modes, identical offsets, aligned buffers,
+depth and checksums. RX comparison reuses the same independent sender, payload
+validation and 256-buffer single/multishot workloads. Both alternate library order
+after warmup; setup/registration and accept are excluded. Runtime setup/registration
+policies remain each library's own. Buffer bundles are Snowy-only in this comparison.
+
 CI executes comparisons as smoke tests only; publish rankings only after repeated
-runs on controlled hardware. Condy comparison does not yet cover storage or RX;
-those targets compare raw/wrapped I/O or Snowy's receive modes. Zero-copy and
-cross-loop channel throughput are not measured by this suite.
+runs on controlled hardware. Zero-copy and cross-loop channel throughput are not
+yet measured by this suite.

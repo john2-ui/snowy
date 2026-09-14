@@ -3,6 +3,13 @@
 #include "common.hpp"
 #include <snowy/file.hpp>
 #include <snowy/uring.hpp>
+#ifdef SNOWY_WITH_CONDY
+#include <snowy/uring_ops.hpp>
+#include <condy/task.hpp>
+#include <condy/async_operations.hpp>
+#include <condy/buffers.hpp>
+#include <condy/helpers.hpp>
+#endif
 
 /** @brief Shared workload; cache policy and native setup are identical in each pair. */
 struct workload {
@@ -17,6 +24,63 @@ std::uint64_t offset(std::uint64_t& seed, std::uint64_t blocks, unsigned size) {
     seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
     return (seed % blocks) * size;
 }
+#ifdef SNOWY_WITH_CONDY
+/** @brief Run the identical random stream through Condy. @param fd Ordinary descriptor.
+ *  @param data Lane buffer. @param lane Lane/registered buffer index. @param work Workload.
+ *  @param blocks File blocks. @param checksum First-byte checksum. */
+condy::Coro<> reference_lane(int fd, std::span<std::byte> data, unsigned lane,
+    const workload& work, std::uint64_t blocks, std::uint64_t& checksum) {
+    std::uint64_t seed = lane + 1;
+    for (unsigned i = 0; i < work.count; ++i) {
+        const auto pos = offset(seed, blocks, work.size);
+        const auto buffer = condy::buffer(data.data(), data.size());
+        const int n = work.fixed
+            ? co_await condy::async_read(condy::fixed(0), condy::fixed(static_cast<int>(lane), buffer), pos)
+            : co_await condy::async_read(fd, buffer, pos);
+        if (n != static_cast<int>(data.size())) throw std::runtime_error("Condy short file read");
+        checksum += std::to_integer<unsigned>(data.front());
+    }
+}
+/** @brief Exclude open, allocation and registration exactly as for Snowy.
+ *  @param work Shared workload. @param checksum Reset output checksum. */
+double reference(const workload& work, std::uint64_t& checksum) {
+    snowy::uring::fd file(::open(work.path, O_RDONLY | O_CLOEXEC | (work.direct ? O_DIRECT : 0)));
+    if (file.get() < 0) throw std::system_error(errno, std::generic_category());
+    const auto blocks = std::filesystem::file_size(work.path) / work.size;
+    if (!blocks) throw std::invalid_argument("file smaller than a block");
+    snowy::uring::memory memory(std::size_t{work.size} * work.depth);
+    std::vector<iovec> regions;
+    for (unsigned i = 0; i < work.depth; ++i)
+        regions.push_back({memory.bytes().data() + std::size_t{i} * work.size, work.size});
+    condy::RuntimeOptions options;
+    options.sq_size(work.options.entries).event_interval(work.options.budget);
+    if (work.options.flags & IORING_SETUP_IOPOLL) options.enable_iopoll();
+    if (work.options.flags & IORING_SETUP_SQPOLL) options.enable_sqpoll();
+    // Construct after memory so implicit registration cleanup precedes memory release.
+    condy::Runtime runtime(options);
+    const int fd = file.get();
+    if (work.fixed) {
+        int result = runtime.fd_table().init(&fd, 1);
+        if (result < 0) throw std::system_error(-result, std::generic_category());
+        result = runtime.buffer_table().init(regions.data(), work.depth);
+        if (result < 0) throw std::system_error(-result, std::generic_category());
+    }
+    std::vector<condy::Task<>> jobs;
+    jobs.reserve(work.depth);
+    for (unsigned i = 0; i < work.depth; ++i)
+        jobs.push_back(condy::co_spawn(runtime, reference_lane(fd,
+            {static_cast<std::byte*>(regions[i].iov_base), work.size}, i, work, blocks, checksum)));
+    runtime.allow_exit();
+    const auto start = bench::clock::now();
+    runtime.run();
+    std::exception_ptr error;
+    for (auto& job : jobs) {
+        try { job.wait(); } catch (...) { if (!error) error = std::current_exception(); }
+    }
+    if (error) std::rethrow_exception(error);
+    return bench::elapsed(start) / (double(work.count) * work.depth);
+}
+#endif
 /** @brief Keep one wrapped read outstanding. @param loop Owner. @param fd File.
  *  @param files Optional fixed file table. @param buffers Optional fixed buffer table.
  *  @param data Lane buffer. @param lane Index. @param work Workload. @param blocks File blocks.
@@ -37,6 +101,9 @@ snowy::task<> lane(snowy::loop& loop, int fd, snowy::uring::files* files, snowy:
  *  @param checksum Output checksum, reset for this run. */
 double measure(const workload& work, bool raw, std::uint64_t& checksum) {
     checksum = 0;
+#ifdef SNOWY_WITH_CONDY
+    if (raw) return reference(work, checksum);
+#endif
     snowy::loop loop(work.options);
     snowy::file file(loop, work.path, snowy::file::mode::read, work.direct);
     const auto blocks = std::filesystem::file_size(work.path) / work.size;
@@ -125,7 +192,11 @@ int main(int argc, char** argv) {
             if (a != b) throw std::runtime_error("checksums differ; input changed");
             if (i) { raw.push_back(x); wrapped.push_back(y); }
         }
+#ifdef SNOWY_WITH_CONDY
+        bench::report("condy storage", raw);
+#else
         bench::report("liburing storage", raw);
+#endif
         bench::report("snowy storage", wrapped);
         std::cout << "mode=" << mode << " depth=" << work.depth << " bytes=" << work.size
                   << " checksum=" << a << " (IOPS = 1e9 / ns/op; cache state uncontrolled)\n";
