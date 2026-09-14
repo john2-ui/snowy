@@ -91,10 +91,36 @@ class files {
 public:
     /** @brief Register descriptors. @param loop Owner. @param fds Valid native descriptors. */
     files(loop& loop, std::span<const int> fds);
+    /** @brief Allocate empty registered slots. @param loop Owner. @param count Positive slots. */
+    files(loop& loop, unsigned count);
     /** @brief Unregister an idle table; destroying a table referenced by ops terminates. */
     ~files();
     files(const files&) = delete;
     files& operator=(const files&) = delete;
+    /** @brief Replace slots in an idle table; -1 removes a descriptor.
+     *  @param offset First slot. @param fds Replacements. @return Number updated.
+     *  @details Kernel updates may be partial. All referencing op objects must be destroyed. */
+    unsigned update(unsigned offset, std::span<const int> fds);
+    /** @brief Open directly into a registered slot, returning zero on success.
+     *  @param index Destination slot. @param path Borrowed null-terminated path.
+     *  @param flags O_* flags. @param mode Creation permissions. @param token Cancellation.
+     *  @details Path survives the await. Serialize all uses of the destination slot. */
+    [[nodiscard]] op open(unsigned index, const char* path, int flags, unsigned mode = 0, std::stop_token token = {});
+    /** @brief Close a direct descriptor. @param index Slot, serialized against other uses.
+     *  @param token Cancellation. */
+    [[nodiscard]] op close(unsigned index, std::stop_token token = {});
+    /** @brief Create a socket directly in a slot. @param index Destination slot.
+     *  @param domain AF_*. @param type SOCK_*. @param protocol IPPROTO_*. @param token Cancellation. */
+    [[nodiscard]] op socket(unsigned index, int domain, int type, int protocol = 0, std::stop_token token = {});
+    /** @brief Accept directly into a slot, returning zero. @param index Destination slot.
+     *  @param listener Ordinary listening socket on this loop. @param token Cancellation. */
+    [[nodiscard]] op accept(unsigned index, snowy::socket& listener, std::stop_token token = {});
+    /** @brief Receive using a fixed socket slot. @param index Slot. @param data Destination.
+     *  @param flags MSG_*. @param token Cancellation. @details Serialize reads on each slot. */
+    [[nodiscard]] op recv(unsigned index, std::span<std::byte> data, int flags = 0, std::stop_token token = {});
+    /** @brief Send using a fixed socket slot. @param index Slot. @param data Source.
+     *  @param flags MSG_*. @param token Cancellation. @details Serialize writes on each slot. */
+    [[nodiscard]] op send(unsigned index, std::span<const std::byte> data, int flags = 0, std::stop_token token = {});
     /** @brief Read using a fixed file index. @param index Registered file slot.
      *  @param data Borrowed destination. @param offset Byte offset. @param token Cancellation. */
     [[nodiscard]] op read(unsigned index, std::span<std::byte> data, std::uint64_t offset, std::stop_token token = {});
@@ -122,10 +148,16 @@ class buffers {
 public:
     /** @brief Register stable regions. @param loop Owner. @param regions Writable buffers. */
     buffers(loop& loop, std::span<const iovec> regions);
+    /** @brief Allocate empty registered buffer slots. @param loop Owner. @param count Positive slots. */
+    buffers(loop& loop, unsigned count);
     /** @brief Unregister before releasing memory, after all operations are destroyed. */
     ~buffers();
     buffers(const buffers&) = delete;
     buffers& operator=(const buffers&) = delete;
+    /** @brief Replace idle slots; null/zero regions remove registrations.
+     *  @param offset First slot. @param regions Replacements. @return Number updated.
+     *  @details Kernel updates may be partial. Destroy referencing ops before updating. */
+    unsigned update(unsigned offset, std::span<const iovec> regions);
     /** @brief Borrow a registered region. @param index Buffer slot. */
     std::span<std::byte> at(unsigned index) const;
 private:

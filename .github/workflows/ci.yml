@@ -109,7 +109,7 @@ jobs:
         env:
           SNOWY_REQUIRE_ADVANCED: '1'
         run: |
-          ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail)$'
+          ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail|sparse|directfd|fixednet)$'
           ./build/bench/snowy_rx multi 1000 2048
 
       - name: Comparison smoke run (not a performance ranking)

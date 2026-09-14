@@ -1,6 +1,7 @@
 /** @file uring_ops.cpp
  *  @brief Registered-resource ownership and typed native operations. */
 #include "snowy/uring.hpp"
+#include <algorithm>
 #include <bit>
 #include <climits>
 #include <deque>
@@ -75,6 +76,61 @@ files::files(loop& loop, std::span<const int> fds) : loop_(loop), size_(fds.size
 files::~files() {
     if (active_ || io_uring_unregister_files(&access::ring(loop_)) < 0) std::terminate();
 }
+files::files(loop& loop, unsigned count) : loop_(loop), size_(count) {
+    if (!count || count > INT_MAX) throw std::invalid_argument("invalid file table size");
+    verify(io_uring_register_files_sparse(&access::ring(loop), count));
+}
+unsigned files::update(unsigned offset, std::span<const int> fds) {
+    loop_.check();
+    if (active_) throw std::logic_error("file table still referenced");
+    if (offset > size_ || fds.size() > size_ - offset) throw std::out_of_range("file update range");
+    if (fds.empty()) return 0;
+    const int n = io_uring_register_files_update(&access::ring(loop_), offset, fds.data(), static_cast<unsigned>(fds.size()));
+    verify(n);
+    return static_cast<unsigned>(n);
+}
+op files::open(unsigned index, const char* path, int flags, unsigned mode, std::stop_token token) {
+    check(index);
+    if (!path) throw std::invalid_argument("null path");
+    io_uring_sqe sqe{};
+    io_uring_prep_openat_direct(&sqe, AT_FDCWD, path, flags, mode, index);
+    return {loop_, sqe, token, this};
+}
+op files::close(unsigned index, std::stop_token token) {
+    check(index);
+    io_uring_sqe sqe{};
+    io_uring_prep_close_direct(&sqe, index);
+    return {loop_, sqe, token, this};
+}
+op files::socket(unsigned index, int domain, int type, int protocol, std::stop_token token) {
+    check(index);
+    io_uring_sqe sqe{};
+    io_uring_prep_socket_direct(&sqe, domain, type, protocol, index, 0);
+    return {loop_, sqe, token, this};
+}
+op files::accept(unsigned index, snowy::socket& listener, std::stop_token token) {
+    check(index);
+    if (&access::owner(listener) != &loop_) throw std::invalid_argument("foreign listener");
+    io_uring_sqe sqe{};
+    io_uring_prep_accept_direct(&sqe, listener.native_handle(), nullptr, nullptr, 0, index);
+    return {loop_, sqe, token, this, nullptr, access::direction(listener, false)};
+}
+op files::recv(unsigned index, std::span<std::byte> data, int flags, std::stop_token token) {
+    check(index);
+    bounds(data.size(), 0);
+    io_uring_sqe sqe{};
+    io_uring_prep_recv(&sqe, static_cast<int>(index), data.data(), data.size(), flags);
+    sqe.flags |= IOSQE_FIXED_FILE;
+    return {loop_, sqe, token, this};
+}
+op files::send(unsigned index, std::span<const std::byte> data, int flags, std::stop_token token) {
+    check(index);
+    bounds(data.size(), 0);
+    io_uring_sqe sqe{};
+    io_uring_prep_send(&sqe, static_cast<int>(index), data.data(), data.size(), flags | MSG_NOSIGNAL);
+    sqe.flags |= IOSQE_FIXED_FILE;
+    return {loop_, sqe, token, this};
+}
 void files::check(unsigned index) const {
     loop_.check();
     if (index >= size_) throw std::out_of_range("file table index");
@@ -112,9 +168,29 @@ buffers::buffers(loop& loop, std::span<const iovec> regions) : loop_(loop), regi
 buffers::~buffers() {
     if (active_ || io_uring_unregister_buffers(&access::ring(loop_)) < 0) std::terminate();
 }
+buffers::buffers(loop& loop, unsigned count) : loop_(loop) {
+    if (!count || count > 65536) throw std::invalid_argument("invalid buffer table size");
+    regions_.resize(count);
+    verify(io_uring_register_buffers_sparse(&access::ring(loop), count));
+}
+unsigned buffers::update(unsigned offset, std::span<const iovec> regions) {
+    loop_.check();
+    if (active_) throw std::logic_error("buffer table still referenced");
+    if (offset > regions_.size() || regions.size() > regions_.size() - offset)
+        throw std::out_of_range("buffer update range");
+    for (auto region : regions) if ((!region.iov_base != !region.iov_len) || region.iov_len > INT_MAX)
+        throw std::invalid_argument("invalid registered buffer");
+    if (regions.empty()) return 0;
+    const int n = io_uring_register_buffers_update_tag(&access::ring(loop_), offset, regions.data(), nullptr,
+                                                      static_cast<unsigned>(regions.size()));
+    verify(n);
+    std::copy_n(regions.begin(), n, regions_.begin() + offset);
+    return static_cast<unsigned>(n);
+}
 std::span<std::byte> buffers::at(unsigned index) const {
     loop_.check();
     const auto& region = regions_.at(index);
+    if (!region.iov_base) throw std::logic_error("empty buffer slot");
     return {static_cast<std::byte*>(region.iov_base), region.iov_len};
 }
 bool supports(loop& loop, unsigned opcode) {

@@ -89,6 +89,11 @@ See the [registered-file example](examples/fixed.cpp).
   Registered memory must outlive its table, and tables must outlive every referencing
   operation. `file(..., direct=true)` requests direct I/O on Linux/Windows;
   alignment constraints depend on the filesystem/device. macOS rejects this mode.
+- `files(loop, count)` / `buffers(loop, count)` allocate sparse tables; `update`
+  replaces idle slots and returns the possibly partial update count. Destroy all
+  referencing operations before updating. Direct `files::open/socket/accept/close`
+  operate on registered slots, not ordinary descriptors; serialize each slot's
+  replacement/close against its I/O. These direct descriptors do not imply `O_DIRECT`.
 - `uring::submit` batches one-shot SQEs with soft/hard links and DRAIN, returning
   raw results in input order. DRAIN requires earlier user I/O to finish naturally;
   do not place it behind long-lived receives/polls that need later cancellation.
