@@ -179,7 +179,8 @@ buffers::buffers(loop& loop, const buffers& source) : loop_(loop), regions_(sour
     // Do not copy a foreign thread's registered-ring index: use its ordinary fd.
     io_uring borrowed{};
     borrowed.ring_fd = access::fd(source.loop_);
-    verify(io_uring_clone_buffers(&access::ring(loop), &borrowed));
+    const int result = io_uring_clone_buffers(&access::ring(loop), &borrowed);
+    if (result < 0) throw std::system_error(-result, std::generic_category(), "clone buffers");
 #else
     throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "buffer cloning needs liburing 2.9+");
 #endif

@@ -57,14 +57,15 @@ loop::loop(const uring::options& config) : driver_(std::make_unique<driver>()) {
     driver_->submit_batch = config.submit_batch;
     // SINGLE_ISSUER arrived after Linux 5.15; retry without it on older kernels.
     io_uring_params params{};
-    params.flags = config.flags | IORING_SETUP_SINGLE_ISSUER;
+    params.flags = config.flags | (config.single_issuer ? IORING_SETUP_SINGLE_ISSUER : 0);
     if (config.wq_fd >= 0) { params.flags |= IORING_SETUP_ATTACH_WQ; params.wq_fd = static_cast<unsigned>(config.wq_fd); }
     params.cq_entries = config.cq_entries;
     if (config.cq_entries) params.flags |= IORING_SETUP_CQSIZE;
     params.sq_thread_idle = config.idle_ms;
     params.sq_thread_cpu = config.cpu;
     int result = io_uring_queue_init_params(config.entries, &driver_->ring, &params);
-    if (result == -EINVAL && !(config.flags & (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN))) {
+    if (result == -EINVAL && config.single_issuer
+        && !(config.flags & (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN))) {
         params.flags &= ~IORING_SETUP_SINGLE_ISSUER;
         result = io_uring_queue_init_params(config.entries, &driver_->ring, &params);
     }

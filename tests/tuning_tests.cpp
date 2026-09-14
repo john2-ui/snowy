@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
         options.entries = 32;
         options.submit_batch = 3;
         options.register_fd = mode == "ringfd";
+        options.single_issuer = mode != "clone";
         snowy::loop loop(options);
         if (mode == "wq") {
             auto old = snowy::uring::workers(loop, {2, 3});

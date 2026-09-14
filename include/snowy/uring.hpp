@@ -30,6 +30,7 @@ struct options {
     unsigned submit_batch = 0; ///< Flush threshold; zero waits for a full SQ or native poll.
     int wq_fd = -1; ///< Borrow another ring's ordinary fd during setup to share io-wq.
     bool register_fd = false; ///< Register the ring descriptor on its owner thread (5.18+).
+    bool single_issuer = true; ///< Opportunistic SINGLE_ISSUER; disable on cross-thread clone sources.
 };
 
 /** @brief Internal bridge; applications use the typed operations below. */
@@ -160,7 +161,8 @@ public:
     /** @brief Clone another ring's registrations without repinning (liburing 2.9+, Linux 6.12+).
      *  @param loop Destination. @param source Stable source table, externally synchronized.
      *  @details Source updates/destruction must not race construction. Borrowed memory
-     *  outlives both independent tables; later source updates do not alter this clone. */
+     *  outlives both independent tables; later source updates do not alter this clone.
+     *  Cross-thread sources must opt out of SINGLE_ISSUER; newer kernels enforce its affinity. */
     buffers(loop& loop, const buffers& source);
     /** @brief Unregister before releasing memory, after all operations are destroyed. */
     ~buffers();
