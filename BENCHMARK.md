@@ -9,6 +9,8 @@ cmake --build build --config Release --parallel
 ./build/bench/snowy_runtime task 1000000
 ./build/bench/snowy_runtime schedule 1000000
 ./build/bench/snowy_runtime spawn 1000000
+./build/bench/snowy_channel 1000000 1024
+./build/bench/snowy_file /path/to/existing-file 10000 32 random 4096
 ./build/bench/snowy_tcp 10000 128
 ./build/bench/snowy_tcp 10000 2048
 ./build/bench/snowy_tcp 10000 65536
@@ -28,6 +30,12 @@ With MSVC, executables are under `build/bench/Release` and end in `.exe`.
   Disable LTO: `task` intentionally retains a noinline child factory and checksum.
 - `spawn` uses batches of 64 roots, including allocation and reclamation;
   `schedule` measures cooperative queue roundtrips on one loop thread.
+- Channel: one producer/consumer on one loop, configurable capacity, verified
+  order/count. Units are ns/message (send + receive), not ns per API call.
+- File: read-only buffered I/O, preallocated per-lane buffers, deterministic
+  random or interleaved sequential offsets. Open/close and root allocation are
+  excluded. Use a non-sparse file of at least 8 GiB for storage tests; cache state,
+  filesystem and backing device must be reported. Warm cached reads are not SSD IOPS.
 - TCP: one connection, one outstanding message, client/server on the same loop,
   TCP_NODELAY, up to 1,000 warmup messages. Reports per-message p50/p99/max RTT
   and bidirectional payload MiB/s, excluding setup/teardown. Throughput includes
@@ -45,5 +53,30 @@ For regressions, use `perf stat`/`perf record` on an optimized build with debug
 symbols; `strace -c` can reveal syscall overhead when perf access is restricted.
 Keep raw data and profiler outputs outside the repository.
 
-File I/O, channels, multishot receive and multiple loop threads need their own
-equivalent workloads before comparisons; the current suite does not measure them.
+## Condy comparison
+
+Provide a separate upstream checkout; Snowy does not vendor or patch Condy.
+The CI reference is `01dcf995b711e67ac4416a07fdfe6347a388ad14`.
+
+```sh
+cmake -S . -B build -DSNOWY_BUILD_BENCHMARKS=ON \
+  -DSNOWY_CONDY_INCLUDE_DIR=/path/to/condy/include
+cmake --build build --parallel
+./build/bench/snowy_compare task 1000000
+./build/bench/snowy_compare schedule 1000000
+./build/bench/snowy_compare nop 10000 32
+```
+
+Both implementations share one binary, compiler/STL and sample procedure.
+Task mode uses the same blocking bridge, noinline child factories and checksum;
+it measures immediate coroutine calls, not the runtimes. Schedule/NOP use each
+library's own runtime, 256-entry rings and a 64-work event interval. Condy's ring
+registration/setup policies remain upstream defaults, not identical backend flags.
+These modes require a kernel supporting upstream Condy's io_uring flags; task
+mode also runs on older kernels. With liburing 2.3, explicitly select its static
+archive via `URING_LIBRARY` (its shared library omits `io_uring_enable_rings`).
+The reference also requires a standard library with `std::format`.
+
+CI executes comparisons as smoke tests only; publish rankings only after repeated
+runs on controlled hardware. Multishot, zero-copy and cross-loop channel throughput
+are outside this suite; do not infer their performance from these workloads.
