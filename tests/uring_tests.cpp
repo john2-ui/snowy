@@ -55,6 +55,30 @@ snowy::task<> run(snowy::loop& loop, snowy::file& file) {
 }
 /** @brief Check idle timers still run on a storage-only ring. @param loop Owner. */
 snowy::task<> idle(snowy::loop& loop) { co_await loop.sleep(std::chrono::milliseconds{1}); }
+/** @brief Verify soft/hard links, drain and ordered error results. @param loop Owner.
+ *  @param fd Readable file containing data for an execution-time EFAULT. */
+snowy::task<> chain(snowy::loop& loop, int fd) {
+    std::array<io_uring_sqe, 3> entries{};
+    io_uring_prep_nop(&entries[0]);
+    io_uring_prep_read(&entries[1], fd, nullptr, 1, 0);
+    io_uring_prep_nop(&entries[2]);
+    auto result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::soft);
+    check(result[0] == 0 && result[1] == -EFAULT && result[2] == -ECANCELED);
+    result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::hard);
+    check(result[0] == 0 && result[1] == -EFAULT && result[2] == 0);
+    io_uring_prep_nop(&entries[1]);
+    entries[2].flags = IOSQE_IO_DRAIN;
+    for (unsigned i = 0; i < 128; ++i) {
+        result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::soft);
+        check(result == std::vector<int>({0, 0, 0}));
+    }
+    // The wake source must work again after the last drain has retired.
+    co_await loop.sleep(std::chrono::milliseconds{1});
+    io_uring_sqe drain{};
+    io_uring_prep_nop(&drain);
+    drain.flags = IOSQE_IO_DRAIN;
+    check((co_await snowy::uring::op(loop, drain)) == 0);
+}
 /** @brief Run an optional kernel/device mode, reporting unsupported separately.
  *  @param argc Argument count. @param argv Optional direct, sqpoll, or iopoll mode. */
 int main(int argc, char** argv) {
@@ -74,6 +98,7 @@ int main(int argc, char** argv) {
                          mode == "direct" || mode == "iopoll");
         loop.run(run(loop, file));
         loop.run(idle(loop));
+        if (mode == "plain" || mode == "sqpoll") loop.run(chain(loop, file.native_handle()));
         bool caught = false;
         options.entries = 0;
         try { snowy::loop invalid(options); } catch (const std::invalid_argument&) { caught = true; }

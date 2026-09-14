@@ -3,6 +3,12 @@
 #include "snowy/uring.hpp"
 #include <bit>
 #include <climits>
+#include <deque>
+
+// Native SQEs in coroutine frames contain the Linux UAPI zero-length array.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
 
 namespace snowy::uring {
 namespace {
@@ -128,5 +134,63 @@ op nop(loop& loop, std::stop_token token) {
     io_uring_sqe sqe{};
     io_uring_prep_nop(&sqe);
     return {loop, sqe, token};
+}
+
+task<std::vector<int>> submit(loop& loop, std::span<const io_uring_sqe> entries,
+                             link order, std::stop_token token) {
+    loop.check();
+    if (loop.stopped() || token.stop_requested())
+        throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+    if (entries.empty()) co_return std::vector<int>{};
+    if (entries.size() > 32768) throw std::invalid_argument("batch exceeds maximum ring size");
+    // Allocate stable nodes and result slots before any SQE can reach the kernel.
+    event done(loop);
+    std::size_t pending = entries.size();
+    std::vector<int> results(entries.size());
+    struct entry : detail::io {
+        io_uring_sqe sqe;
+        int& output;
+        std::size_t& pending;
+        event& done;
+        /** @brief Bind a stable batch node. @param loop Owner. @param sqe Prepared SQE.
+         *  @param output Result slot. @param pending Remaining count. @param done Barrier. */
+        entry(snowy::loop& loop, io_uring_sqe sqe, int& output, std::size_t& pending, event& done)
+            : detail::io(loop, detail::opcode::native), sqe(sqe), output(output), pending(pending), done(done) {
+            prepare = [](detail::io& op, io_uring_sqe& sqe) noexcept { sqe = static_cast<entry&>(op).sqe; };
+            result = [](detail::io& op, int res, unsigned) noexcept { static_cast<entry&>(op).output = res; };
+            retire = [](detail::io& op) noexcept {
+                auto& self = static_cast<entry&>(op);
+                if (!--self.pending) self.done.set();
+            };
+        }
+    };
+    std::deque<entry> requests;
+    bool drain = false;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        auto sqe = entries[i];
+        switch (sqe.opcode) {
+        case IORING_OP_NOP: case IORING_OP_READ: case IORING_OP_WRITE:
+        case IORING_OP_READV: case IORING_OP_WRITEV: case IORING_OP_READ_FIXED:
+        case IORING_OP_WRITE_FIXED: case IORING_OP_FSYNC: case IORING_OP_FALLOCATE:
+        case IORING_OP_SPLICE: break;
+        default: throw std::invalid_argument("batch requires supported single-shot operations");
+        }
+        if (sqe.flags & (IOSQE_CQE_SKIP_SUCCESS | IOSQE_BUFFER_SELECT | IOSQE_IO_LINK | IOSQE_IO_HARDLINK))
+            throw std::invalid_argument("invalid batch SQE flags");
+        if (i + 1 < entries.size()) {
+            if (order == link::soft) sqe.flags |= IOSQE_IO_LINK;
+            if (order == link::hard) sqe.flags |= IOSQE_IO_HARDLINK;
+        }
+        drain |= (sqe.flags & IOSQE_IO_DRAIN) != 0;
+        requests.emplace_back(loop, sqe, results[i], pending, done);
+    }
+    access::reserve(loop, static_cast<unsigned>(entries.size()) + (drain ? 1 : 0), drain);
+    // Register callbacks before publishing. A racing stop only marks nodes; the
+    // owner processes cancellation after this complete chain is in the SQ.
+    for (auto& request : requests)
+        if (token.stop_possible()) request.callback.emplace(token, detail::op::cancel_fn{&request});
+    for (auto& request : requests) access::start(request);
+    co_await done.join();
+    co_return results;
 }
 } // namespace snowy::uring

@@ -10,6 +10,13 @@
 #include <span>
 #include <new>
 
+// Linux UAPI embeds a zero-length command array in SQEs. GCC diagnoses its
+// use in class/coroutine storage even when liburing is a system include.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 namespace snowy::uring {
 /** @brief Owner-thread ring configuration, fixed for the lifetime of a loop. */
 struct options {
@@ -32,6 +39,12 @@ public:
     static bool* direction(socket& socket, bool write);
     /** @brief Adopt an accepted descriptor. @param loop Owner. @param fd Transferred fd. */
     static socket adopt(loop& loop, int fd);
+    /** @brief Reserve a batch before publishing. @param loop Owner. @param count Slots.
+     *  @param drain Cancel the internal wake poll before (never inside) the chain. */
+    static void reserve(loop& loop, unsigned count, bool drain = false);
+    /** @brief Publish one preallocated batch entry. @param request Stable state with a retire hook.
+     *  @details Caller reserves the entire batch first; no user code runs between entries. */
+    static void start(detail::io& request);
 };
 
 /** @brief Owned aligned storage for direct/registered I/O; never resizes. */
@@ -134,6 +147,19 @@ bool supports(loop& loop, unsigned opcode);
 [[nodiscard]] op write(loop& loop, int fd, std::span<const std::byte> data, std::uint64_t offset, std::stop_token token = {});
 /** @brief Allocation-free native NOP. @param loop Owner. @param token Cancellation. */
 [[nodiscard]] op nop(loop& loop, std::stop_token token = {});
+
+/** @brief Kernel-side ordering within one submission batch. */
+enum class link { none, soft, hard };
+/** @brief Submit one-shot SQEs together and drain every result, even on cancellation.
+ *  @param loop Owner. @param entries Borrowed SQEs and pointed-to resources, valid until return.
+ *  @param order No links, soft links (cancel followers on failure), or hard links.
+ *  @param token Cancellation. @return Raw CQE results in input order, including negative errno.
+ *  @details Supports NOP, positional read/write (ordinary, vector, fixed), FSYNC,
+ *  FALLOCATE and SPLICE. user_data and link flags are managed here. No CQE skipping.
+ *  DRAIN waits for earlier user I/O, not Snowy's wake poll. A batch must fit the SQ;
+ *  with DRAIN one extra slot is required. Buffer/file tables must outlive the batch. */
+task<std::vector<int>> submit(loop& loop, std::span<const io_uring_sqe> entries,
+                             link order = link::none, std::stop_token token = {});
 
 /** @brief Zero-copy send; returns only when the kernel no longer references memory.
  *  @param socket Peer. @param data Borrowed immutable bytes. @param token Cancellation.
@@ -277,3 +303,6 @@ task<> accept(socket& listener, F fn, std::stop_token token = {}) {
     }
 }
 } // namespace snowy::uring
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif

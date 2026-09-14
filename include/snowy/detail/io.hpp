@@ -41,6 +41,8 @@ struct io : op {
 #ifdef __linux__
     void (*prepare)(io&, io_uring_sqe&) noexcept = nullptr; ///< Linux extension submission.
     void (*result)(io&, int, unsigned) noexcept = nullptr; ///< CQE handler; never resumes inline.
+    void (*retire)(io&) noexcept = nullptr; ///< Optional batch completion instead of a continuation.
+    bool draining = false; ///< Native DRAIN temporarily suppresses the wake poll.
 #endif
 #ifdef _WIN32
     /** @brief Native completion address with a portable owner back-pointer. */

@@ -161,6 +161,14 @@ void loop::complete(detail::io& op) noexcept {
     if (op.prev) op.prev->next = op.next;
     else io_ = op.next;
     if (op.next) op.next->prev = op.prev;
+#ifdef __linux__
+    if (op.retire) {
+        op.callback.reset();
+        op.active = false;
+        op.retire(op);
+        return;
+    }
+#endif
     finish(op);
 }
 
