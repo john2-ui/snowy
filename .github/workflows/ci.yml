@@ -88,7 +88,21 @@ jobs:
         run: cmake --build build --config ${{ matrix.config }} --parallel
 
       - name: Test
-        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure --output-junit "${{ github.workspace }}/build/results.xml"
+
+      - name: Annotate test failures
+        if: failure()
+        shell: python
+        run: |
+          import pathlib
+          import xml.etree.ElementTree as xml
+          report = pathlib.Path('build/results.xml')
+          if report.exists():
+              for case in xml.parse(report).iter('testcase'):
+                  if case.find('failure') is not None:
+                      output = (case.findtext('system-out') or 'Test failed or timed out')[-3000:]
+                      output = output.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                      print(f"::error title={case.get('name')}::{output}")
 
       - name: Require native Linux optimizations
         if: runner.os == 'Linux'
