@@ -13,6 +13,7 @@
 #include "snowy/channel.hpp"
 #include "snowy/mailbox.hpp"
 #include "snowy/futex.hpp"
+#include "snowy/spawn.hpp"
 #include "snowy/pool.hpp"
 #include "snowy/when.hpp"
 #include "snowy/udp.hpp"

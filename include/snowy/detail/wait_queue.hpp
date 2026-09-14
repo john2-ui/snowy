@@ -77,7 +77,8 @@ struct remote_wait : wait, message {
     /** @brief Prune canceled heads under q.mutex; return the first live waiter.
      *  @param q Shared FIFO. */
     static remote_wait* front(wait_queue& q) noexcept {
-        while (q.first && (q.first->canceled.load(std::memory_order_relaxed) || q.first->owner.stopped()))
+        while (q.first && q.first->interruptible
+               && (q.first->canceled.load(std::memory_order_relaxed) || q.first->owner.stopped()))
             q.first->deliver(std::make_error_code(std::errc::operation_canceled));
         return q.first;
     }

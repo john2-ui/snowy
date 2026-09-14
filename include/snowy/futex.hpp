@@ -20,12 +20,13 @@ public:
         futex& source;
         T old;
         /** @brief Bind a wait. @param f Queue. @param owner Resumption loop.
-         *  @param old Expected value. @param token Cancellation. */
-        awaiter(futex& f, loop& owner, T old, std::stop_token token)
-            : remote_wait(f.queue_, owner, token), source(f), old(old) {}
+         *  @param old Expected value. @param token Cancellation. @param cancelable Honor stop. */
+        awaiter(futex& f, loop& owner, T old, std::stop_token token, bool cancelable = true)
+            : remote_wait(f.queue_, owner, token), source(f), old(old) { interruptible = cancelable; }
         /** @brief Atomically check and enqueue relative to notifications. @param h Continuation. */
         bool await_suspend(std::coroutine_handle<> h) {
-            if (canceled_now()) return false;
+            owner.check();
+            if (interruptible && canceled_now()) return false;
             std::lock_guard lock(queue.mutex);
             if (source.value_.load(std::memory_order_acquire) != old) return false;
             return enqueue(h);
@@ -35,6 +36,11 @@ public:
      *  @param old Expected value. @param token Optional cancellation. */
     [[nodiscard]] awaiter wait(loop& owner, T old, std::stop_token token = {}) {
         return {*this, owner, old, token};
+    }
+    /** @brief Wait despite loop.stop() for mandatory cleanup. @param owner Resumption loop.
+     *  @param old Expected value. @details Producer must eventually change and notify. */
+    [[nodiscard]] awaiter join(loop& owner, T old) {
+        return {*this, owner, old, {}, false};
     }
     /** @brief Wake one live waiter on its own loop; callable from any thread. */
     void notify_one() noexcept {

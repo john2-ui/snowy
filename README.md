@@ -47,6 +47,9 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
 - `task<T, Allocator>` uses an explicit leading allocator argument for its frame;
   `<snowy/pmr.hpp>` provides `pmr::task<T>`. The resource outlives frame destruction
   and must support the threads that allocate/free it. Children choose independently.
+- `spawn(loop, task)` returns a move-only `join_handle<T>`: await it on a loop or
+  call `get()` outside loop execution. Joining drains through stop; destruction
+  or `detach()` discards the result/error but leaves task cleanup owned by the loop.
 - Construct, run and destroy a loop on its owner thread. `run()` drains roots
   and posts, returning at idle. `post`, `stop` and `keep_alive` are thread-safe.
   Hold a keep-alive guard before starting an otherwise idle destination loop.
