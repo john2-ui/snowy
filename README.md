@@ -68,6 +68,9 @@ Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md
   and `recv(loop)` resume on the supplied loop. `futex<T>` awaits an external
   atomic; store before notifying and recheck the predicate after wakeup.
 - `when_all` joins a vector of same-result tasks or a typed task pack into a tuple.
+  It also accepts stable lvalue awaiters or owned zero-argument factories returning
+  direct I/O awaiters. `when_any(loop, factories...)` deduces a variant result;
+  explicit `when_any<T>` retains the homogeneous index/value API.
   `when_any`/`timeout` take
   token-aware factories and drain canceled children before returning; timeout is
   cooperative, not a guarantee that cleanup finishes at the deadline. Typed
@@ -99,6 +102,7 @@ See the [registered-file example](examples/fixed.cpp).
   replacement/close against its I/O. These direct descriptors do not imply `O_DIRECT`.
 - `buffers(destination, source)` clones registrations with liburing 2.9+/Linux 6.12+.
   Synchronize source mutation during cloning; underlying memory outlives both tables.
+  Cross-thread clone sources require `options.single_issuer = false`.
   Older builds reject cloning/NAPI explicitly instead of silently emulating them.
 - `uring::submit` batches one-shot SQEs with soft/hard links and DRAIN, returning
   raw results in input order. DRAIN requires earlier user I/O to finish naturally;

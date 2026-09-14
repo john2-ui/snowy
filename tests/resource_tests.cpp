@@ -47,6 +47,10 @@ snowy::task<> tables(snowy::loop& loop, temp& file, bool sparse) {
     std::fill(data.begin(), data.end(), std::byte{});
     check((co_await files->read(1, *buffers, 1, 0)) == 4096);
     for (auto b : data.subspan(4096)) check(b == std::byte{42});
+    auto reads = co_await snowy::when_all(loop,
+        [&] { return files->read(1, *buffers, 0, 0); },
+        [&] { return files->read(1, *buffers, 1, 0); });
+    check(std::get<0>(reads) == 4096 && std::get<1>(reads) == 4096);
     bool caught = false;
     try { co_await files->read(0, *buffers, 0, 0); }
     catch (const std::system_error& e) { caught = e.code().value() == EBADF; }

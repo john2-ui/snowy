@@ -94,6 +94,28 @@ snowy::task<> run(snowy::loop& loop) {
         [value = std::make_unique<int>(7), &loop](std::stop_token) {
             check(*value == 7); return quick(loop);
         })) == 42);
+    auto timer = loop.sleep(1ms);
+    auto yield = loop.schedule();
+    co_await snowy::when_all(loop, timer, yield);
+    auto direct = co_await snowy::when_all(loop,
+        [&] { return loop.sleep(1ms); },
+        [&] { return item(loop, 9); });
+    check(*std::get<1>(direct) == 9);
+    auto variant = co_await snowy::when_any(loop,
+        [&](std::stop_token t) { return loop.sleep(1h, t); },
+        [&](std::stop_token) { return item(loop, 11); });
+    check(variant.index() == 1 && *std::get<1>(variant) == 11);
+    auto void_winner = co_await snowy::when_any(loop,
+        [&](std::stop_token t) { return loop.sleep(1ms, t); },
+        [&](std::stop_token t) { return loop.sleep(1h, t); });
+    check(void_winner.index() == 0);
+    caught = false;
+    try {
+        co_await snowy::when_any(loop,
+            [&](std::stop_token) { return fail(loop); },
+            [&](std::stop_token t) { return loop.sleep(1h, t); });
+    } catch (const std::runtime_error&) { caught = true; }
+    check(caught);
 }
 /** @brief Run tests under a real backend. */
 int main() {
