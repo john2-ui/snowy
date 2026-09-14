@@ -40,7 +40,7 @@ public:
     /** @brief Adopt an accepted descriptor. @param loop Owner. @param fd Transferred fd. */
     static socket adopt(loop& loop, int fd);
     /** @brief Reserve a batch before publishing. @param loop Owner. @param count Slots.
-     *  @param drain Cancel the internal wake poll before (never inside) the chain. */
+     *  @param drain Wake the internal poll before publishing the chain. */
     static void reserve(loop& loop, unsigned count, bool drain = false);
     /** @brief Publish one preallocated batch entry. @param request Stable state with a retire hook.
      *  @details Caller reserves the entire batch first; no user code runs between entries. */
@@ -156,8 +156,9 @@ enum class link { none, soft, hard };
  *  @param token Cancellation. @return Raw CQE results in input order, including negative errno.
  *  @details Supports NOP, positional read/write (ordinary, vector, fixed), FSYNC,
  *  FALLOCATE and SPLICE. user_data and link flags are managed here. No CQE skipping.
- *  DRAIN waits for earlier user I/O, not Snowy's wake poll. A batch must fit the SQ;
- *  with DRAIN one extra slot is required. Buffer/file tables must outlive the batch. */
+ *  DRAIN waits for earlier user I/O, not Snowy's wake poll. Earlier user I/O must
+ *  finish naturally, without depending on later cancellation requests. A batch
+ *  must fit the SQ. Buffer/file tables must outlive the batch. */
 task<std::vector<int>> submit(loop& loop, std::span<const io_uring_sqe> entries,
                              link order = link::none, std::stop_token token = {});
 

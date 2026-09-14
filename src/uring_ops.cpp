@@ -184,7 +184,7 @@ task<std::vector<int>> submit(loop& loop, std::span<const io_uring_sqe> entries,
         drain |= (sqe.flags & IOSQE_IO_DRAIN) != 0;
         requests.emplace_back(loop, sqe, results[i], pending, done);
     }
-    access::reserve(loop, static_cast<unsigned>(entries.size()) + (drain ? 1 : 0), drain);
+    access::reserve(loop, static_cast<unsigned>(entries.size()), drain);
     // Register callbacks before publishing. A racing stop only marks nodes; the
     // owner processes cancellation after this complete chain is in the SQ.
     for (auto& request : requests)

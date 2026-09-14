@@ -11,7 +11,7 @@ struct loop::driver {
     io_uring ring{};
     int event = -1;
     bool iopoll = false;
-    bool watching = false, watch_cancel = false;
+    bool watching = false, watch_waking = false;
     unsigned drains = 0;
     /** @brief Allocate a submission slot, submitting a full batch if necessary. */
     io_uring_sqe* sqe() {
@@ -77,11 +77,12 @@ void uring::access::reserve(loop& loop, unsigned count, bool drain) {
         const int n = io_uring_submit(&ring);
         if (n < 0 && n != -EINTR) throw std::system_error(-n, std::generic_category());
     }
-    if (drain && loop.driver_->watching && !loop.driver_->watch_cancel) {
-        auto* cancel = loop.driver_->sqe();
-        io_uring_prep_cancel(cancel, nullptr, 0);
-        io_uring_sqe_set_data64(cancel, 2);
-        loop.driver_->watch_cancel = true;
+    if (drain && loop.driver_->watching && !loop.driver_->watch_waking) {
+        // A preceding linked DRAIN may force the next poll through io-wq.
+        // Cancellation can then race its installation; a level-triggered wake
+        // remains observable even before that poll has reached the kernel.
+        loop.wake();
+        loop.driver_->watch_waking = true;
     }
 }
 void uring::access::start(detail::io& request) {
@@ -114,8 +115,8 @@ void loop::submit(detail::io& op) {
     io_uring_sqe native{};
     if (op.prepare) op.prepare(op, native);
     if (native.flags & IOSQE_IO_DRAIN) {
-        if (driver_->watching && !driver_->watch_cancel) {
-            uring::access::reserve(*this, 2, true);
+        if (driver_->watching && !driver_->watch_waking) {
+            uring::access::reserve(*this, 1, true);
         }
         op.draining = true;
         ++driver_->drains;
@@ -204,7 +205,6 @@ void loop::poll(std::chrono::nanoseconds delay) {
         auto* cqe = batch[i];
         const auto tag = static_cast<std::uintptr_t>(io_uring_cqe_get_data64(cqe));
         if (!tag) { wake_seen = true; continue; }
-        if (tag == 2) { driver_->watch_cancel = false; continue; }
         auto& op = *reinterpret_cast<detail::io*>(tag & ~std::uintptr_t{1});
         if (tag & 1) {
             op.canceling = false;
@@ -226,6 +226,7 @@ void loop::poll(std::chrono::nanoseconds delay) {
     io_uring_cq_advance(&driver_->ring, count);
     if (wake_seen) {
         driver_->watching = false;
+        driver_->watch_waking = false;
         std::uint64_t value;
         ssize_t result;
         do { result = ::read(driver_->event, &value, sizeof(value)); }
@@ -233,7 +234,7 @@ void loop::poll(std::chrono::nanoseconds delay) {
         if (result < 0 && errno != EAGAIN)
             throw std::system_error(errno, std::generic_category(), "eventfd read");
     }
-    if (!driver_->iopoll && !driver_->watching && !driver_->watch_cancel && !driver_->drains)
+    if (!driver_->iopoll && !driver_->watching && !driver_->drains)
         driver_->watch();
 }
 } // namespace snowy
