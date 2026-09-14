@@ -7,8 +7,15 @@
 #include <cstdlib>
 #include <iostream>
 
-/** @brief Fail in optimized builds too. @param ok Required invariant. */
-void check(bool ok) { if (!ok) std::abort(); }
+/** @brief Report failing expressions in optimized builds too. @param ok Required invariant.
+ *  @param expression Assertion text. @param line Source line. */
+void verify(bool ok, const char* expression, int line) {
+    if (!ok) {
+        std::cerr << "line " << line << ": " << expression << '\n';
+        std::abort();
+    }
+}
+#define check(...) verify((__VA_ARGS__), #__VA_ARGS__, __LINE__)
 /** @brief Own one exclusively created temporary file. */
 struct temp {
     char path[32] = "/tmp/snowy-uring-XXXXXX";
@@ -55,17 +62,21 @@ snowy::task<> run(snowy::loop& loop, snowy::file& file) {
 }
 /** @brief Check idle timers still run on a storage-only ring. @param loop Owner. */
 snowy::task<> idle(snowy::loop& loop) { co_await loop.sleep(std::chrono::milliseconds{1}); }
-/** @brief Verify soft/hard links, drain and ordered error results. @param loop Owner.
- *  @param fd Readable file containing data for an execution-time EFAULT. */
-snowy::task<> chain(snowy::loop& loop, int fd) {
+/** @brief Verify soft/hard links, drain and ordered error results. @param loop Owner. */
+snowy::task<> chain(snowy::loop& loop) {
+    auto socket = snowy::socket::listen(loop, {"127.0.0.1", 0});
     std::array<io_uring_sqe, 3> entries{};
     io_uring_prep_nop(&entries[0]);
-    io_uring_prep_read(&entries[1], fd, nullptr, 1, 0);
+    // A null read buffer can fail during preparation on newer kernels, aborting
+    // the entire chain. Fsync on a socket fails at execution, which tests LINK.
+    io_uring_prep_fsync(&entries[1], socket.native_handle(), 0);
     io_uring_prep_nop(&entries[2]);
     auto result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::soft);
-    check(result[0] == 0 && result[1] == -EFAULT && result[2] == -ECANCELED);
+    if (result != std::vector<int>({0, -EINVAL, -ECANCELED}))
+        std::cerr << "soft results: " << result[0] << ' ' << result[1] << ' ' << result[2] << '\n';
+    check(result[0] == 0 && result[1] == -EINVAL && result[2] == -ECANCELED);
     result = co_await snowy::uring::submit(loop, entries, snowy::uring::link::hard);
-    check(result[0] == 0 && result[1] == -EFAULT && result[2] == 0);
+    check(result[0] == 0 && result[1] == -EINVAL && result[2] == 0);
     io_uring_prep_nop(&entries[1]);
     entries[2].flags = IOSQE_IO_DRAIN;
     for (unsigned i = 0; i < 128; ++i) {
@@ -98,7 +109,7 @@ int main(int argc, char** argv) {
                          mode == "direct" || mode == "iopoll");
         loop.run(run(loop, file));
         loop.run(idle(loop));
-        if (mode == "plain" || mode == "sqpoll") loop.run(chain(loop, file.native_handle()));
+        if (mode == "plain" || mode == "sqpoll") loop.run(chain(loop));
         bool caught = false;
         options.entries = 0;
         try { snowy::loop invalid(options); } catch (const std::invalid_argument&) { caught = true; }
