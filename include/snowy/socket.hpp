@@ -17,6 +17,7 @@ public:
     std::uint16_t port() const noexcept;
 private:
     friend class socket;
+    friend class udp;
     sockaddr_storage address_{};
     int size_ = sizeof(sockaddr_in);
 };
@@ -68,6 +69,7 @@ public:
     detail::socket_id native_handle() const noexcept { return fd_; }
 
 private:
+    friend class udp;
     loop* loop_;
     detail::socket_id fd_;
     bool reading_ = false;

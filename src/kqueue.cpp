@@ -39,6 +39,7 @@ namespace {
 /** @brief Select readiness direction. @param op Native socket request. */
 short filter(const detail::io& op) {
     return op.code == detail::opcode::read || op.code == detail::opcode::accept
+        || op.code == detail::opcode::recv_from
         ? EVFILT_READ : EVFILT_WRITE;
 }
 }
@@ -51,6 +52,23 @@ void loop::submit(detail::io& op) {
         case detail::opcode::read: r = ::recv(op.fd, op.data, op.size, 0); break;
         case detail::opcode::write: r = ::send(op.fd, op.data, op.size, 0); break;
         case detail::opcode::accept: r = ::accept(op.fd, nullptr, nullptr); break;
+        case detail::opcode::recv_from:
+        case detail::opcode::send_to:
+            op.vector = {op.data, op.size};
+            op.message = {};
+            op.message.msg_name = &op.address;
+            op.message.msg_namelen = static_cast<socklen_t>(op.address_size);
+            op.message.msg_iov = &op.vector;
+            op.message.msg_iovlen = 1;
+            r = op.code == detail::opcode::recv_from
+                ? ::recvmsg(op.fd, &op.message, 0) : ::sendmsg(op.fd, &op.message, 0);
+            if (r >= 0 && op.code == detail::opcode::recv_from) {
+                op.address_size = static_cast<int>(op.message.msg_namelen);
+                if (op.message.msg_flags & MSG_TRUNC) {
+                    op.error = std::make_error_code(std::errc::message_size);
+                }
+            }
+            break;
         case detail::opcode::connect:
             if (!op.started) {
                 r = ::connect(op.fd, reinterpret_cast<sockaddr*>(&op.address),

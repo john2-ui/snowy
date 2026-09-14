@@ -73,6 +73,16 @@ void loop::submit(detail::io& op) {
     case detail::opcode::connect:
         io_uring_prep_connect(sqe, op.fd, reinterpret_cast<sockaddr*>(&op.address),
                              static_cast<socklen_t>(op.address_size)); break;
+    case detail::opcode::recv_from:
+    case detail::opcode::send_to:
+        op.vector = {op.data, op.size};
+        op.message.msg_name = &op.address;
+        op.message.msg_namelen = static_cast<socklen_t>(op.address_size);
+        op.message.msg_iov = &op.vector;
+        op.message.msg_iovlen = 1;
+        if (op.code == detail::opcode::recv_from) io_uring_prep_recvmsg(sqe, op.fd, &op.message, 0);
+        else io_uring_prep_sendmsg(sqe, op.fd, &op.message, MSG_NOSIGNAL);
+        break;
     }
     io_uring_sqe_set_data(sqe, &op);
 }
@@ -118,6 +128,11 @@ void loop::poll(std::chrono::nanoseconds delay) {
             if (cqe->res < 0) op.error = {-cqe->res, std::generic_category()};
             else if (op.code == detail::opcode::accept) op.accepted = cqe->res;
             else op.bytes = static_cast<std::size_t>(cqe->res);
+            if (op.code == detail::opcode::recv_from && cqe->res >= 0) {
+                op.address_size = static_cast<int>(op.message.msg_namelen);
+                if (op.message.msg_flags & MSG_TRUNC)
+                    op.error = std::make_error_code(std::errc::message_size);
+            }
             if (!op.canceling) complete(op);
         }
     }

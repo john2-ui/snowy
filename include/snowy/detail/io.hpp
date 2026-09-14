@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <sys/uio.h>
 #endif
 
 namespace snowy::detail {
@@ -25,7 +26,7 @@ inline constexpr socket_id invalid_socket = -1;
 #endif
 
 /** @brief Supported native request kinds. */
-enum class opcode { nop, read, write, accept, connect };
+enum class opcode { nop, read, write, accept, connect, recv_from, send_to };
 
 /** @brief Single-shot native request; nonmovable while the kernel retains it. */
 struct io : op {
@@ -36,6 +37,10 @@ struct io : op {
     } overlapped{};
     WSABUF buffer{};
     char accept_buffer[2 * (sizeof(sockaddr_storage) + 16)]{};
+    DWORD flags = 0;
+#else
+    iovec vector{};
+    msghdr message{};
 #endif
     opcode code;
     socket_id fd;

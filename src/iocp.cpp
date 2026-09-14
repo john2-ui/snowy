@@ -35,6 +35,12 @@ void loop::attach(std::uintptr_t fd) {
 }
 
 namespace {
+/** @brief Normalize portable socket completion errors. @param code Winsock status. */
+std::error_code io_error(int code) {
+    if (code == WSA_OPERATION_ABORTED) return std::make_error_code(std::errc::operation_canceled);
+    if (code == WSAEMSGSIZE) return std::make_error_code(std::errc::message_size);
+    return {code, std::system_category()};
+}
 /** @brief Query a provider-specific Winsock extension.
  *  @param fd Socket provider. @param id Extension identifier. */
 template <typename T>
@@ -65,6 +71,12 @@ void loop::submit(detail::io& op) {
         result = WSARecv(op.fd, &op.buffer, 1, &bytes, &flags, &op.overlapped, nullptr); break;
     case detail::opcode::write:
         result = WSASend(op.fd, &op.buffer, 1, &bytes, 0, &op.overlapped, nullptr); break;
+    case detail::opcode::recv_from:
+        result = WSARecvFrom(op.fd, &op.buffer, 1, nullptr, &op.flags,
+            reinterpret_cast<sockaddr*>(&op.address), &op.address_size, &op.overlapped, nullptr); break;
+    case detail::opcode::send_to:
+        result = WSASendTo(op.fd, &op.buffer, 1, nullptr, 0,
+            reinterpret_cast<sockaddr*>(&op.address), op.address_size, &op.overlapped, nullptr); break;
     case detail::opcode::accept: {
         sockaddr_storage address{};
         int size = sizeof(address);
@@ -94,7 +106,7 @@ void loop::submit(detail::io& op) {
     if (result == SOCKET_ERROR) {
         const int error = WSAGetLastError();
         if (error != WSA_IO_PENDING) {
-            op.error = {error, std::system_category()};
+            op.error = io_error(error);
             complete(op);
         }
     }
@@ -134,9 +146,7 @@ void loop::poll(std::chrono::nanoseconds delay) {
             if (entries[i].Internal != 0 &&
                 !WSAGetOverlappedResult(op.fd, &op.overlapped, &bytes, FALSE, &flags)) {
                 const int error = WSAGetLastError();
-                op.error = error == WSA_OPERATION_ABORTED
-                    ? std::make_error_code(std::errc::operation_canceled)
-                    : std::error_code(error, std::system_category());
+                op.error = io_error(error);
             }
             if (!op.error && op.code == detail::opcode::accept &&
                 setsockopt(op.accepted, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
