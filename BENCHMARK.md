@@ -99,7 +99,7 @@ The reference also requires a standard library with `std::format`.
 
 Storage comparison reuses all six storage modes, identical offsets, aligned buffers,
 depth and checksums. RX comparison reuses the same independent sender, payload
-validation and 256-buffer single/multishot workloads. Both alternate library order
+validation for single-shot or 256-buffer multishot receives. Both alternate library order
 after warmup; setup/registration and accept are excluded. Runtime setup/registration
 policies remain each library's own. Buffer bundles are Snowy-only in this comparison.
 

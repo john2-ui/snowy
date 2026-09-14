@@ -11,7 +11,7 @@
 #include <condy/helpers.hpp>
 #endif
 
-/** @brief Shared workload; cache policy and native setup are identical in each pair. */
+/** @brief Shared offsets/depth; runtime setup follows the selected implementation. */
 struct workload {
     const char* path;
     unsigned count, depth, size;
