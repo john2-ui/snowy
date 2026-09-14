@@ -8,3 +8,7 @@ endif()
 
 add_test(NAME snowy.core COMMAND snowy_core_tests)
 set_tests_properties(snowy.core PROPERTIES TIMEOUT 30)
+add_executable(snowy_loop_tests loop_tests.cpp)
+target_link_libraries(snowy_loop_tests PRIVATE snowy::snowy)
+add_test(NAME snowy.loop COMMAND snowy_loop_tests)
+set_tests_properties(snowy.loop PROPERTIES TIMEOUT 30)

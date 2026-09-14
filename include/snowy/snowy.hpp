@@ -7,3 +7,4 @@
 
 #include "snowy/sync_wait.hpp"
 #include "snowy/task.hpp"
+#include "snowy/loop.hpp"
