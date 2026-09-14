@@ -11,10 +11,16 @@ struct loop::driver {
     io_uring ring{};
     int event = -1;
     bool iopoll = false;
+    bool registered = false;
+    unsigned submit_batch = 0;
     bool watching = false, watch_waking = false;
     unsigned drains = 0;
     /** @brief Allocate a submission slot, submitting a full batch if necessary. */
-    io_uring_sqe* sqe() {
+    io_uring_sqe* sqe(bool flush = true) {
+        if (flush && submit_batch && io_uring_sq_ready(&ring) >= submit_batch) {
+            const int n = io_uring_submit(&ring);
+            if (n < 0 && n != -EINTR) throw std::system_error(-n, std::generic_category());
+        }
         auto* entry = io_uring_get_sqe(&ring);
         while (!entry) {
             const int n = io_uring_submit(&ring);
@@ -40,6 +46,7 @@ loop::loop(const uring::options& config) : driver_(std::make_unique<driver>()) {
         IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN | IORING_SETUP_DEFER_TASKRUN |
         IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_SUBMIT_ALL;
     if (!config.entries || config.entries > 32768 || !config.budget || (config.flags & ~allowed) ||
+        config.submit_batch > config.entries || config.wq_fd < -1 ||
         (config.cq_entries && config.cq_entries < config.entries) ||
         ((config.flags & IORING_SETUP_SQ_AFF) && !(config.flags & IORING_SETUP_SQPOLL)) ||
         ((config.flags & IORING_SETUP_SQPOLL) && (config.flags &
@@ -47,9 +54,11 @@ loop::loop(const uring::options& config) : driver_(std::make_unique<driver>()) {
         throw std::invalid_argument("invalid uring options");
     budget_ = config.budget;
     driver_->iopoll = config.flags & IORING_SETUP_IOPOLL;
+    driver_->submit_batch = config.submit_batch;
     // SINGLE_ISSUER arrived after Linux 5.15; retry without it on older kernels.
     io_uring_params params{};
     params.flags = config.flags | IORING_SETUP_SINGLE_ISSUER;
+    if (config.wq_fd >= 0) { params.flags |= IORING_SETUP_ATTACH_WQ; params.wq_fd = static_cast<unsigned>(config.wq_fd); }
     params.cq_entries = config.cq_entries;
     if (config.cq_entries) params.flags |= IORING_SETUP_CQSIZE;
     params.sq_thread_idle = config.idle_ms;
@@ -60,16 +69,25 @@ loop::loop(const uring::options& config) : driver_(std::make_unique<driver>()) {
         result = io_uring_queue_init_params(config.entries, &driver_->ring, &params);
     }
     if (result < 0) throw std::system_error(-result, std::generic_category(), "io_uring_setup");
-    driver_->event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (driver_->event < 0) {
-        const int error = errno;
+    try {
+        if (config.register_fd) {
+            result = io_uring_register_ring_fd(&driver_->ring);
+            if (result < 0) throw std::system_error(-result, std::generic_category(), "register ring fd");
+            driver_->registered = true;
+        }
+        driver_->event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (driver_->event < 0) throw std::system_error(errno, std::generic_category(), "eventfd");
+        if (!driver_->iopoll) driver_->watch();
+    } catch (...) {
+        if (driver_->event >= 0) ::close(driver_->event);
+        if (driver_->registered) io_uring_unregister_ring_fd(&driver_->ring);
         io_uring_queue_exit(&driver_->ring);
-        throw std::system_error(error, std::generic_category(), "eventfd");
+        throw;
     }
-    if (!driver_->iopoll) driver_->watch();
 }
 
 io_uring& uring::access::ring(loop& loop) { loop.check(); return loop.driver_->ring; }
+int uring::access::fd(const loop& loop) noexcept { return loop.driver_->ring.ring_fd; }
 void uring::access::reserve(loop& loop, unsigned count, bool drain) {
     auto& ring = access::ring(loop);
     if (count > ring.sq.ring_entries) throw std::invalid_argument("batch exceeds ring capacity");
@@ -97,6 +115,7 @@ void uring::access::start(detail::io& request) {
 loop::~loop() {
     if (running_ || roots_ || io_ || waits_ || holds_ || !messages_.empty()
         || !timers_.empty() || !ready_.empty()) std::terminate();
+    if (driver_->registered && io_uring_unregister_ring_fd(&driver_->ring) < 0) std::terminate();
     io_uring_queue_exit(&driver_->ring);
     ::close(driver_->event);
 }
@@ -122,7 +141,8 @@ void loop::submit(detail::io& op) {
         op.draining = true;
         ++driver_->drains;
     }
-    auto* sqe = driver_->sqe();
+    // Linked batches reserve their whole chain; never flush a partial chain.
+    auto* sqe = driver_->sqe(!op.retire);
     switch (op.code) {
     case detail::opcode::native: *sqe = native; break;
     case detail::opcode::nop: io_uring_prep_nop(sqe); break;

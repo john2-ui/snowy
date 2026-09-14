@@ -9,6 +9,7 @@
 #include <liburing.h>
 #include <span>
 #include <new>
+#include <array>
 
 // Linux UAPI embeds a zero-length command array in SQEs. GCC diagnoses its
 // use in class/coroutine storage even when liburing is a system include.
@@ -26,6 +27,9 @@ struct options {
     unsigned idle_ms = 1000; ///< SQPOLL idle timeout.
     unsigned cpu = 0; ///< SQ_AFF CPU index, ignored without SQ_AFF.
     unsigned budget = 64; ///< Positive ready-work budget between polls.
+    unsigned submit_batch = 0; ///< Flush threshold; zero waits for a full SQ or native poll.
+    int wq_fd = -1; ///< Borrow another ring's ordinary fd during setup to share io-wq.
+    bool register_fd = false; ///< Register the ring descriptor on its owner thread (5.18+).
 };
 
 /** @brief Internal bridge; applications use the typed operations below. */
@@ -33,6 +37,9 @@ class access {
 public:
     /** @brief Borrow an owner-thread ring. @param loop Owner. */
     static io_uring& ring(loop& loop);
+    /** @brief Borrow the immutable ordinary ring fd from any thread. @param loop Live owner.
+     *  @details The caller prevents concurrent loop destruction. */
+    static int fd(const loop& loop) noexcept;
     /** @brief Borrow a socket's owner. @param socket Checked socket. */
     static loop& owner(socket& socket);
     /** @brief Borrow a direction reservation. @param socket Socket. @param write Direction. */
@@ -150,6 +157,11 @@ public:
     buffers(loop& loop, std::span<const iovec> regions);
     /** @brief Allocate empty registered buffer slots. @param loop Owner. @param count Positive slots. */
     buffers(loop& loop, unsigned count);
+    /** @brief Clone another ring's registrations without repinning (liburing 2.9+, Linux 6.12+).
+     *  @param loop Destination. @param source Stable source table, externally synchronized.
+     *  @details Source updates/destruction must not race construction. Borrowed memory
+     *  outlives both independent tables; later source updates do not alter this clone. */
+    buffers(loop& loop, const buffers& source);
     /** @brief Unregister before releasing memory, after all operations are destroyed. */
     ~buffers();
     buffers(const buffers&) = delete;
@@ -167,6 +179,16 @@ private:
     std::vector<iovec> regions_;
     std::size_t active_ = 0;
 };
+
+/** @brief Set io-wq limits and return previous values. @param loop Owner.
+ *  @param limits Bounded and unbounded worker limits; zero queries without changing. */
+std::array<unsigned, 2> workers(loop& loop, std::array<unsigned, 2> limits);
+/** @brief Set/reset io-wq CPU affinity. @param loop Owner. @param mask CPU set, or nullptr to reset. */
+void affinity(loop& loop, const cpu_set_t* mask);
+/** @brief Configure NAPI busy polling (liburing 2.6+, suitable kernel/NIC required).
+ *  @param loop Owner. @param usecs Busy-poll duration. @param prefer Prefer busy polling.
+ *  @details Zero duration disables busy polling. Configuration success is not proof of NIC support. */
+void napi(loop& loop, unsigned usecs, bool prefer = false);
 
 /** @brief Probe an opcode, not its flags or hardware prerequisites.
  *  @param loop Owner. @param opcode IORING_OP_* value. */

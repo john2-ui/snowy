@@ -173,6 +173,17 @@ buffers::buffers(loop& loop, unsigned count) : loop_(loop) {
     regions_.resize(count);
     verify(io_uring_register_buffers_sparse(&access::ring(loop), count));
 }
+buffers::buffers(loop& loop, const buffers& source) : loop_(loop), regions_(source.regions_) {
+    loop.check();
+#if defined(IO_URING_VERSION_MAJOR) && (IO_URING_VERSION_MAJOR > 2 || IO_URING_VERSION_MINOR >= 9)
+    // Do not copy a foreign thread's registered-ring index: use its ordinary fd.
+    io_uring borrowed{};
+    borrowed.ring_fd = access::fd(source.loop_);
+    verify(io_uring_clone_buffers(&access::ring(loop), &borrowed));
+#else
+    throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "buffer cloning needs liburing 2.9+");
+#endif
+}
 unsigned buffers::update(unsigned offset, std::span<const iovec> regions) {
     loop_.check();
     if (active_) throw std::logic_error("buffer table still referenced");
@@ -192,6 +203,27 @@ std::span<std::byte> buffers::at(unsigned index) const {
     const auto& region = regions_.at(index);
     if (!region.iov_base) throw std::logic_error("empty buffer slot");
     return {static_cast<std::byte*>(region.iov_base), region.iov_len};
+}
+std::array<unsigned, 2> workers(loop& loop, std::array<unsigned, 2> limits) {
+    verify(io_uring_register_iowq_max_workers(&access::ring(loop), limits.data()));
+    return limits;
+}
+void affinity(loop& loop, const cpu_set_t* mask) {
+    auto& ring = access::ring(loop);
+    verify(mask ? io_uring_register_iowq_aff(&ring, sizeof(*mask), mask) : io_uring_unregister_iowq_aff(&ring));
+}
+void napi(loop& loop, unsigned usecs, bool prefer) {
+    loop.check();
+#if defined(IO_URING_VERSION_MAJOR) && (IO_URING_VERSION_MAJOR > 2 || IO_URING_VERSION_MINOR >= 6)
+    io_uring_napi config{};
+    config.busy_poll_to = usecs;
+    config.prefer_busy_poll = prefer;
+    verify(io_uring_register_napi(&access::ring(loop), &config));
+#else
+    (void)usecs;
+    (void)prefer;
+    throw std::system_error(std::make_error_code(std::errc::operation_not_supported), "NAPI needs liburing 2.6+");
+#endif
 }
 bool supports(loop& loop, unsigned opcode) {
     auto* probe = io_uring_get_probe_ring(&access::ring(loop));

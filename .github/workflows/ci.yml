@@ -64,6 +64,22 @@ jobs:
             -DCMAKE_CXX_FLAGS="-nostdinc++ -isystem $llvm_prefix/include/c++/v1" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$llvm_prefix/lib/c++ -L$llvm_prefix/lib/unwind -Wl,-rpath,$llvm_prefix/lib/c++ -Wl,-rpath,$llvm_prefix/lib/unwind -lunwind"
 
+      - name: Checkout modern liburing
+        if: runner.os == 'Linux' && matrix.config == 'Debug'
+        uses: actions/checkout@v6
+        with:
+          repository: axboe/liburing
+          ref: 08468cc3830185c75f9e7edefd88aa01e5c2f8ab
+          path: build-liburing
+
+      - name: Build modern liburing
+        if: runner.os == 'Linux' && matrix.config == 'Debug'
+        working-directory: build-liburing
+        run: |
+          ./configure --prefix="$GITHUB_WORKSPACE/build-uring"
+          make -C src -j2
+          make -C src install
+
       - name: Configure
         if: runner.os != 'macOS'
         shell: bash
@@ -76,6 +92,10 @@ jobs:
           repository: condy-cpp/condy
           ref: 01dcf995b711e67ac4416a07fdfe6347a388ad14
           path: build-condy
+
+      - name: Configure modern liburing
+        if: runner.os == 'Linux' && matrix.config == 'Debug'
+        run: cmake -S . -B build -DURING_INCLUDE_DIR="$PWD/build-uring/include" -DURING_LIBRARY="$PWD/build-uring/lib/liburing.a"
 
       - name: Configure comparison
         if: runner.os == 'Linux' && matrix.config == 'Release'
@@ -109,7 +129,7 @@ jobs:
         env:
           SNOWY_REQUIRE_ADVANCED: '1'
         run: |
-          ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail|sparse|directfd|fixednet)$'
+          ctest --test-dir build --output-on-failure -R 'snowy\.uring\.(recv|accept|zc|fail|sparse|directfd|fixednet|ringfd)$'
           ./build/bench/snowy_rx multi 1000 2048
 
       - name: Comparison smoke run (not a performance ranking)

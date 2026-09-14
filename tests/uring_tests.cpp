@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
         options.entries = 32;
         options.cq_entries = 64;
         options.budget = 16;
+        options.submit_batch = 3;
         if (mode == "sqpoll") options.flags = IORING_SETUP_SQPOLL;
         if (mode == "iopoll") options.flags = IORING_SETUP_IOPOLL;
         snowy::loop loop(options);
