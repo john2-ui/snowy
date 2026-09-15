@@ -41,6 +41,11 @@ Also see [UDP with timeout](examples/datagram.cpp), [file reads](examples/read.c
 a [parallel pipeline](examples/pipeline.cpp), and [cross-thread messages](examples/mailbox.cpp).
 Reproducible performance workloads are documented in [BENCHMARK.md](BENCHMARK.md).
 
+Use clang-format/clangd 18+; formatting lives in `.clang-format`, editor style in
+`.clangd`. Format only files you intend to change: `clang-format -i path/to/file.cpp`.
+For clangd parsing, configure CMake with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
+(Ninja/Makefiles); use `--compile-commands-dir` if the build directory is not `build`.
+
 ## Contracts
 
 - Tasks are lazy and move-only; await them as rvalues. `sync_wait` blocks for

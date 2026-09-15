@@ -1,0 +1,3 @@
+# clangd reads formatting rules from .clang-format automatically.
+Style:
+  FullyQualifiedNamespaces: [std]
